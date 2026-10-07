@@ -2,9 +2,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ImageRouterError, formatToolError } from '../lib/errors.js';
 import { type Deps, runGeneration } from '../lib/generation.js';
+import { withProgress } from './progress.js';
 import { mediaInputs, model, ok, prompt, saving, size } from './schemas.js';
-
-const PROGRESS_INTERVAL_MS = 15_000;
 
 export function registerGenerateVideo(server: McpServer, deps: Deps): void {
   server.registerTool(
@@ -26,24 +25,6 @@ export function registerGenerateVideo(server: McpServer, deps: Deps): void {
       annotations: { readOnlyHint: false, openWorldHint: true },
     },
     async (args, extra) => {
-      const progressToken = extra._meta?.progressToken;
-      let ticks = 0;
-      const timer =
-        progressToken === undefined
-          ? undefined
-          : setInterval(() => {
-              ticks += 1;
-              extra
-                .sendNotification({
-                  method: 'notifications/progress',
-                  params: {
-                    progressToken,
-                    progress: ticks,
-                    message: `Still generating (${(ticks * PROGRESS_INTERVAL_MS) / 1000}s)`,
-                  },
-                })
-                .catch(() => {});
-            }, PROGRESS_INTERVAL_MS);
       try {
         if (!args.prompt && !args.images?.length) {
           throw new ImageRouterError(
@@ -51,11 +32,9 @@ export function registerGenerateVideo(server: McpServer, deps: Deps): void {
             'INVALID_REQUEST',
           );
         }
-        return ok(await runGeneration(deps, 'video', args));
+        return ok(await withProgress(extra, () => runGeneration(deps, 'video', args)));
       } catch (error) {
         return formatToolError(error);
-      } finally {
-        clearInterval(timer);
       }
     },
   );

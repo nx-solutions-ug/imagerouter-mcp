@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -201,20 +201,22 @@ describe('runGeneration', () => {
   });
 
   it('keeps the hosted URL when saving fails after a download', async () => {
-    const { deps, outputDir } = await setup((url) =>
-      url.startsWith('http://api.test')
-        ? json({ data: [{ url: 'http://cdn.test/1.png' }] })
-        : png(),
-    );
-    const blocker = join(outputDir, 'file');
-    await writeFile(blocker, 'x');
+    // The directory passes the pre-check, then the CDN download replaces it with a file, so the
+    // save fails after the paid call.
+    const { deps, outputDir } = await setup(() => json({}));
+    const dir = join(outputDir, 'sub');
+    const fake = fakeFetch(async (url) => {
+      if (url.startsWith('http://api.test'))
+        return json({ data: [{ url: 'http://cdn.test/1.png' }] });
+      await rm(dir, { recursive: true, force: true });
+      await writeFile(dir, 'x');
+      return png();
+    });
+    const client = new ImageRouterClient(deps.config, fake.fetch);
     const error = await failure(
-      runGeneration(deps, 'image', {
-        prompt: 'x',
-        model: 'm',
-        output_dir: join(blocker, 'sub'),
-      }),
+      runGeneration({ ...deps, client }, 'image', { prompt: 'x', model: 'm', output_dir: dir }),
     );
+    expect(fake.calls).toHaveLength(2);
     expect(error.code).toBe('LOCAL_ERROR');
     expect(error.message).toContain('Cannot write to output directory');
     expect(error.message).toContain('http://cdn.test/1.png');
@@ -222,21 +224,64 @@ describe('runGeneration', () => {
   });
 
   it('says an ephemeral result cannot be fetched again when saving fails', async () => {
-    const { deps, outputDir } = await setup(() => json({ data: [{ b64_json: 'AQID' }] }));
-    const blocker = join(outputDir, 'file');
-    await writeFile(blocker, 'x');
+    // The API answer arrives after the pre-check; the directory is swapped for a file meanwhile.
+    const { deps, outputDir } = await setup(() => json({}));
+    const dir = join(outputDir, 'sub');
+    const fake = fakeFetch(async () => {
+      await rm(dir, { recursive: true, force: true });
+      await writeFile(dir, 'x');
+      return json({ data: [{ b64_json: 'AQID' }] });
+    });
+    const client = new ImageRouterClient(deps.config, fake.fetch);
     const error = await failure(
-      runGeneration(deps, 'image', {
+      runGeneration({ ...deps, client }, 'image', {
         prompt: 'x',
         model: 'm',
         ephemeral: true,
-        output_dir: join(blocker, 'sub'),
+        output_dir: dir,
       }),
     );
+    expect(fake.calls).toHaveLength(1);
     expect(error.code).toBe('LOCAL_ERROR');
     expect(error.message).toContain(
       'This was an ephemeral request, so the result cannot be fetched again.',
     );
     expect(error.message).not.toContain('stay available');
+  });
+
+  it.each([false, true])(
+    'refuses an unusable output directory before any API call (ephemeral: %s)',
+    async (ephemeral) => {
+      const { deps, calls, outputDir } = await setup(() => json({ data: [{ b64_json: 'AQID' }] }));
+      const blocker = join(outputDir, 'file');
+      await writeFile(blocker, 'x');
+      const error = await failure(
+        runGeneration(deps, 'image', {
+          prompt: 'x',
+          model: 'm',
+          ephemeral,
+          output_dir: join(blocker, 'sub'),
+        }),
+      );
+      expect(error.code).toBe('LOCAL_ERROR');
+      expect(error.message).toContain('Cannot write to output directory');
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it('refuses a read-only output directory before any API call', async () => {
+    const { deps, calls, outputDir } = await setup(() => json({}));
+    const dir = join(outputDir, 'ro');
+    await mkdir(dir, { mode: 0o500 });
+    try {
+      const error = await failure(
+        runGeneration(deps, 'image', { prompt: 'x', model: 'm', output_dir: dir }),
+      );
+      expect(error.code).toBe('LOCAL_ERROR');
+      expect(error.message).toContain('Cannot write to output directory');
+      expect(calls).toHaveLength(0);
+    } finally {
+      await chmod(dir, 0o700);
+    }
   });
 });

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const prompt = z.string().max(20_000);
+export const prompt = z.string().trim().min(1).max(20_000);
 export const model = z
   .string()
   .min(1)
@@ -25,12 +25,15 @@ export const mediaInputs = z
 export const saving = {
   output_dir: z
     .string()
+    .min(1)
     .optional()
     .describe(
       'Directory to save into. Defaults to IMAGEROUTER_OUTPUT_DIR or ~/Pictures/imagerouter.',
     ),
   filename: z
     .string()
+    .min(1)
+    .max(200)
     .optional()
     .describe('File name without directory; the extension is set from the result.'),
   ephemeral: z

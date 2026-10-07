@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { ImageRouterError } from './errors.js';
 
@@ -133,6 +134,18 @@ export async function saveBytes(dir: string, name: string, bytes: Uint8Array): P
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       }
     }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
+    throw new ImageRouterError(`Cannot write to output directory ${dir} (${code}).`, 'LOCAL_ERROR');
+  }
+}
+
+// Called before a request is billed: a destination that cannot be written to must fail while
+// nothing has been spent yet.
+export async function ensureWritableDir(dir: string): Promise<void> {
+  try {
+    await mkdir(dir, { recursive: true });
+    await access(dir, constants.W_OK);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
     throw new ImageRouterError(`Cannot write to output directory ${dir} (${code}).`, 'LOCAL_ERROR');

@@ -3,7 +3,7 @@ import { expandHome } from './config.js';
 import { ImageRouterError } from './errors.js';
 import type { ImageRouterClient } from './imagerouter-client.js';
 import { buildRequestBody } from './inputs.js';
-import { buildFilename, extensionFor, saveBytes } from './output.js';
+import { buildFilename, ensureWritableDir, extensionFor, saveBytes } from './output.js';
 import type {
   Config,
   GenerationKind,
@@ -73,6 +73,9 @@ export async function runGeneration(
 ): Promise<GenerationResult> {
   const { config, client } = deps;
   const model = resolveModel(config, kind, args.model);
+  // Fail on an unusable destination before the request is billed.
+  const dir = resolve(expandHome(args.output_dir ?? config.outputDir));
+  await ensureWritableDir(dir);
   const body = await buildRequestBody(
     {
       model,
@@ -93,7 +96,6 @@ export async function runGeneration(
     throw new ImageRouterError('ImageRouter returned no result for this request.', 'API_ERROR');
   }
 
-  const dir = resolve(expandHome(args.output_dir ?? config.outputDir));
   const fallback = kind === 'video' ? 'mp4' : (args.output_format ?? 'webp');
   const files: SavedFile[] = [];
   try {

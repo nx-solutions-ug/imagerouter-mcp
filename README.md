@@ -39,6 +39,19 @@ the absolute path to `bunx` (often `/home/you/.bun/bin/bunx`) as `command`.
 Without a key the server still starts and `list_models` works; the other tools
 return an `UNAUTHORIZED` error that names `IMAGEROUTER_API_KEY`.
 
+### Updating
+
+`bunx` keeps using the version it downloaded first, so a new release does not
+reach you on its own. Run the newest release once with the `@latest` tag, which
+also refreshes the cached copy:
+
+```bash
+bunx @chronova/imagerouter-mcp@latest --version
+```
+
+To always start the newest release, put `@chronova/imagerouter-mcp@latest` in the
+commands above instead; `bunx` then checks the registry on every start.
+
 ### From source
 
 ```bash
@@ -185,7 +198,7 @@ No arguments.
 ## Dashboard
 
 ```bash
-IMAGEROUTER_API_KEY=your-key bunx @chronova/imagerouter-mcp dashboard
+IMAGEROUTER_API_KEY=your-key bunx @chronova/imagerouter-mcp@latest dashboard
 ```
 
 Starts a page on `http://127.0.0.1:4477` and opens your browser. Options:

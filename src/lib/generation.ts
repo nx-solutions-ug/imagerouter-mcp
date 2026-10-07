@@ -7,6 +7,7 @@ import { buildFilename, extensionFor, saveBytes } from './output.js';
 import type {
   Config,
   GenerationKind,
+  GenerationResponse,
   GenerationResult,
   OutputFormat,
   Quality,
@@ -43,6 +44,28 @@ function resolveModel(config: Config, kind: GenerationKind, model?: string): str
   );
 }
 
+// The request is already billed once `generate` returns, so a failure while fetching or saving
+// results must say where everything that was produced can still be found.
+function recoveryError(
+  cause: unknown,
+  entries: GenerationResponse['data'],
+  saved: SavedFile[],
+): ImageRouterError {
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  const urls = entries.flatMap((entry) => (entry.url ? [entry.url] : []));
+  const parts = [reason];
+  if (urls.length > 0) {
+    parts.push(`Generated results stay available for 30 days at: ${urls.join(', ')}`);
+  }
+  if (saved.length > 0) {
+    parts.push(`Already saved: ${saved.map((file) => file.path).join(', ')}`);
+  }
+  if (urls.length === 0 && saved.length === 0) {
+    parts.push('This was an ephemeral request, so the result cannot be fetched again.');
+  }
+  return new ImageRouterError(parts.join(' '), 'LOCAL_ERROR');
+}
+
 export async function runGeneration(
   deps: Deps,
   kind: GenerationKind,
@@ -73,20 +96,24 @@ export async function runGeneration(
   const dir = resolve(expandHome(args.output_dir ?? config.outputDir));
   const fallback = kind === 'video' ? 'mp4' : (args.output_format ?? 'webp');
   const files: SavedFile[] = [];
-  for (const entry of entries) {
-    let bytes: Uint8Array;
-    let extension: string;
-    if (entry.url) {
-      const file = await client.download(entry.url);
-      bytes = file.bytes;
-      extension = extensionFor({ contentType: file.contentType, url: entry.url, fallback });
-    } else {
-      bytes = new Uint8Array(Buffer.from(entry.b64_json as string, 'base64'));
-      extension = extensionFor({ fallback });
+  try {
+    for (const entry of entries) {
+      let bytes: Uint8Array;
+      let extension: string;
+      if (entry.url) {
+        const file = await client.download(entry.url);
+        bytes = file.bytes;
+        extension = extensionFor({ contentType: file.contentType, url: entry.url, fallback });
+      } else {
+        bytes = new Uint8Array(Buffer.from(entry.b64_json as string, 'base64'));
+        extension = extensionFor({ fallback });
+      }
+      const name = buildFilename({ prompt: args.prompt, filename: args.filename, extension });
+      const path = await saveBytes(dir, name, bytes);
+      files.push(entry.url ? { path, url: entry.url } : { path });
     }
-    const name = buildFilename({ prompt: args.prompt, filename: args.filename, extension });
-    const path = await saveBytes(dir, name, bytes);
-    files.push(entry.url ? { path, url: entry.url } : { path });
+  } catch (error) {
+    throw recoveryError(error, entries, files);
   }
 
   return {

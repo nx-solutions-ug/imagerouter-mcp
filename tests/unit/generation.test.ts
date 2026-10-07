@@ -1,9 +1,10 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveConfig } from '../../src/lib/config.js';
 import { runGeneration } from '../../src/lib/generation.js';
+import { ImageRouterError } from '../../src/lib/errors.js';
 import { ImageRouterClient } from '../../src/lib/imagerouter-client.js';
 import { fakeFetch, json } from '../helpers/fake-fetch.js';
 
@@ -24,6 +25,15 @@ async function setup(handler: Parameters<typeof fakeFetch>[0], env: Record<strin
     calls: fake.calls,
     outputDir,
   };
+}
+
+async function failure(promise: Promise<unknown>): Promise<ImageRouterError> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as ImageRouterError;
+  }
+  throw new Error('Expected the generation to fail.');
 }
 
 const png = () =>
@@ -160,5 +170,66 @@ describe('runGeneration', () => {
     await expect(runGeneration(deps, 'image', { prompt: 'x', model: 'm' })).rejects.toThrow(
       'http://cdn.test/lost.png',
     );
+  });
+
+  it('lists every hosted URL and saved file when a later download fails', async () => {
+    let downloads = 0;
+    const { deps } = await setup((url) => {
+      if (url.startsWith('http://api.test')) {
+        return json({ data: [{ url: 'http://cdn.test/1.png' }, { url: 'http://cdn.test/2.png' }] });
+      }
+      downloads += 1;
+      return downloads === 1 ? png() : new Response('', { status: 500 });
+    });
+    const error = await failure(runGeneration(deps, 'image', { prompt: 'x', model: 'm' }));
+    expect(error).toBeInstanceOf(ImageRouterError);
+    expect(error.code).toBe('LOCAL_ERROR');
+    expect(downloads).toBe(2);
+    expect(error.message).toContain('Generated results stay available for 30 days at:');
+    expect(error.message).toContain('http://cdn.test/1.png');
+    expect(error.message).toContain('http://cdn.test/2.png');
+    const saved = /Already saved: (\S+)/.exec(error.message)?.[1];
+    expect(saved).toBeDefined();
+    expect([...(await readFile(saved!))]).toEqual([9, 9]);
+  });
+
+  it('keeps the hosted URL when saving fails after a download', async () => {
+    const { deps, outputDir } = await setup((url) =>
+      url.startsWith('http://api.test')
+        ? json({ data: [{ url: 'http://cdn.test/1.png' }] })
+        : png(),
+    );
+    const blocker = join(outputDir, 'file');
+    await writeFile(blocker, 'x');
+    const error = await failure(
+      runGeneration(deps, 'image', {
+        prompt: 'x',
+        model: 'm',
+        output_dir: join(blocker, 'sub'),
+      }),
+    );
+    expect(error.code).toBe('LOCAL_ERROR');
+    expect(error.message).toContain('Cannot write to output directory');
+    expect(error.message).toContain('http://cdn.test/1.png');
+    expect(error.message).not.toContain('Already saved');
+  });
+
+  it('says an ephemeral result cannot be fetched again when saving fails', async () => {
+    const { deps, outputDir } = await setup(() => json({ data: [{ b64_json: 'AQID' }] }));
+    const blocker = join(outputDir, 'file');
+    await writeFile(blocker, 'x');
+    const error = await failure(
+      runGeneration(deps, 'image', {
+        prompt: 'x',
+        model: 'm',
+        ephemeral: true,
+        output_dir: join(blocker, 'sub'),
+      }),
+    );
+    expect(error.code).toBe('LOCAL_ERROR');
+    expect(error.message).toContain(
+      'This was an ephemeral request, so the result cannot be fetched again.',
+    );
+    expect(error.message).not.toContain('stay available');
   });
 });

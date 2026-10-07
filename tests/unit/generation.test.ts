@@ -271,19 +271,60 @@ describe('runGeneration', () => {
     },
   );
 
-  it('refuses a read-only output directory before any API call', async () => {
-    const { deps, calls, outputDir } = await setup(() => json({}));
-    const dir = join(outputDir, 'ro');
-    await mkdir(dir, { mode: 0o500 });
-    try {
-      const error = await failure(
-        runGeneration(deps, 'image', { prompt: 'x', model: 'm', output_dir: dir }),
-      );
-      expect(error.code).toBe('LOCAL_ERROR');
-      expect(error.message).toContain('Cannot write to output directory');
-      expect(calls).toHaveLength(0);
-    } finally {
-      await chmod(dir, 0o700);
+  it.skipIf(process.getuid?.() === 0)(
+    'refuses a read-only output directory before any API call',
+    async () => {
+      const { deps, calls, outputDir } = await setup(() => json({}));
+      const dir = join(outputDir, 'ro');
+      await mkdir(dir, { mode: 0o500 });
+      try {
+        const error = await failure(
+          runGeneration(deps, 'image', { prompt: 'x', model: 'm', output_dir: dir }),
+        );
+        expect(error.code).toBe('LOCAL_ERROR');
+        expect(error.message).toContain('Cannot write to output directory');
+        expect(calls).toHaveLength(0);
+      } finally {
+        await chmod(dir, 0o700);
+      }
+    },
+  );
+
+  it.skipIf(process.getuid?.() === 0)(
+    'refuses an output directory without the execute bit before any API call',
+    async () => {
+      const { deps, calls, outputDir } = await setup(() => json({}));
+      const dir = join(outputDir, 'noexec');
+      await mkdir(dir, { mode: 0o600 });
+      try {
+        const error = await failure(
+          runGeneration(deps, 'image', { prompt: 'x', model: 'm', output_dir: dir }),
+        );
+        expect(error.code).toBe('LOCAL_ERROR');
+        expect(error.message).toContain('Cannot write to output directory');
+        expect(calls).toHaveLength(0);
+      } finally {
+        await chmod(dir, 0o700);
+      }
+    },
+  );
+
+  it('saves a very long non-ASCII filename together with its sidecar', async () => {
+    const { deps, outputDir } = await setup(() => json({}));
+    const fake = fakeFetch(() => json({ data: [{ b64_json: toBase64(makePng(4, 4)) }] }));
+    const client = new ImageRouterClient(deps.config, fake.fetch);
+    for (const filename of ['ü'.repeat(200), '狐'.repeat(200)]) {
+      const result = await runGeneration({ ...deps, client }, 'image', {
+        prompt: 'x',
+        model: 'm',
+        ephemeral: true,
+        filename,
+      });
+      expect(Buffer.byteLength(basename(result.path))).toBeLessThanOrEqual(200);
+      expect(result.path.startsWith(outputDir)).toBe(true);
+      expect((await readFile(result.path)).length).toBeGreaterThan(0);
+      expect(result.metadata_path).toBe(`${result.path}.json`);
+      expect(await readRecord(result.path)).toMatchObject({ width: 4, height: 4 });
     }
   });
 

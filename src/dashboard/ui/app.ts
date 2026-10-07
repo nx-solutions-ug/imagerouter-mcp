@@ -439,8 +439,11 @@ async function generate(event: SubmitEvent): Promise<void> {
         output_format: el<HTMLSelectElement>('format').value,
       }),
     });
-    chosenModel = model;
-    remember(MODEL_KEY, model);
+    // Keep a model the user picked while the request was in flight.
+    if (el<HTMLSelectElement>('model').value === model) {
+      chosenModel = model;
+      remember(MODEL_KEY, model);
+    }
     showResult(result);
     await Promise.all([loadGallery(), loadBalance()]);
   } catch (caught) {

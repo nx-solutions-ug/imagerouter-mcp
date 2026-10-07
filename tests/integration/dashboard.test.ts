@@ -2,7 +2,8 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createDashboardHandler } from '../../src/dashboard/routes.js';
+import { createDashboardHandler, statusFor } from '../../src/dashboard/routes.js';
+import { ImageRouterError } from '../../src/lib/errors.js';
 import { resolveConfig } from '../../src/lib/config.js';
 import { ImageRouterClient } from '../../src/lib/imagerouter-client.js';
 import { fakeFetch, json } from '../helpers/fake-fetch.js';
@@ -171,6 +172,92 @@ describe('dashboard handler', () => {
     const connection = await post(refused.call);
     expect(connection.status).toBe(502);
     expect((await connection.json()).error.code).toBe('CONNECTION_ERROR');
+  });
+
+  it('honours filename, keeps files in the output dir and ignores output_dir', async () => {
+    const { call, outputDir } = await setup((url) =>
+      url.startsWith('http://api.test')
+        ? json({ data: [{ url: 'http://cdn.test/a.png' }] })
+        : png(),
+    );
+    const post = (body: object) =>
+      call('/api/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: ORIGIN },
+        body: JSON.stringify({ prompt: 'x', model: 'm', ...body }),
+      });
+    const named = await (await post({ filename: 'my-fox', output_dir: '/tmp/elsewhere' })).json();
+    expect(named.name).toBe('my-fox.png');
+    expect(named.path).toBe(join(outputDir, 'my-fox.png'));
+
+    const sneaky = await (await post({ filename: '../../x' })).json();
+    expect(sneaky.path.startsWith(outputDir)).toBe(true);
+    expect(sneaky.name).toBe('x.png');
+  });
+
+  it('returns no url for ephemeral generations', async () => {
+    const { call, outputDir } = await setup(() =>
+      json({ data: [{ b64_json: Buffer.from([7]).toString('base64') }] }),
+    );
+    const response = await call('/api/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: ORIGIN },
+      body: JSON.stringify({ prompt: 'x', model: 'm', ephemeral: true }),
+    });
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.url).toBeUndefined();
+    expect(data.path.startsWith(outputDir)).toBe(true);
+  });
+
+  it('maps a request timeout to 504', async () => {
+    const { call } = await setup(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+      { IMAGEROUTER_API_KEY: 'k', IMAGEROUTER_IMAGE_TIMEOUT_MS: '1' },
+    );
+    const response = await call('/api/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: ORIGIN },
+      body: '{"prompt":"x","model":"m"}',
+    });
+    expect(response.status).toBe(504);
+    expect((await response.json()).error.code).toBe('TIMEOUT');
+  });
+
+  it('answers 401 when no API key is configured', async () => {
+    const { call, calls } = await setup(() => json({}), {});
+    const response = await call('/api/credits');
+    expect(response.status).toBe(401);
+    expect((await response.json()).error.code).toBe('UNAUTHORIZED');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('never produces a status outside 400-599', () => {
+    expect(statusFor(new ImageRouterError('x', 'API_ERROR', 999))).toBe(502);
+    expect(statusFor(new ImageRouterError('x', 'SERVER_ERROR', 600))).toBe(502);
+    expect(statusFor(new ImageRouterError('x', 'RATE_LIMITED', 429))).toBe(429);
+    expect(statusFor(new ImageRouterError('x', 'API_ERROR', 200))).toBe(400);
+  });
+
+  it('sets hardening headers', async () => {
+    const { call } = await setup(() => json({}));
+    const page = await call('/');
+    expect(page.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(page.headers.get('cross-origin-resource-policy')).toBeNull();
+    for (const path of ['/api/status', '/api/nope', '/files/missing.png', '/files/notes.txt']) {
+      const response = await call(path);
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(response.headers.get('cross-origin-resource-policy')).toBe('same-origin');
+    }
+    const forbidden = await setup(() => json({}));
+    const blocked = await forbidden.handle(
+      new Request(`${ORIGIN}/api/status`, { headers: { host: 'evil.example' } }),
+    );
+    expect(blocked.status).toBe(403);
+    expect(blocked.headers.get('x-content-type-options')).toBe('nosniff');
   });
 
   it('refuses file names that leave the output directory', async () => {

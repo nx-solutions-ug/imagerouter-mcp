@@ -5,6 +5,7 @@ import { ImageRouterError } from '../lib/errors.js';
 import { type Deps, runGeneration } from '../lib/generation.js';
 import { summariseModels } from '../lib/models.js';
 import { MEDIA_TYPES, listSaved, resolveSavedFile } from '../lib/output.js';
+import { model, outputFormat, prompt, quality, saving, size } from '../tools/schemas.js';
 
 const ASSET_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -14,15 +15,16 @@ const ASSET_TYPES: Record<string, string> = {
   '.map': 'application/json',
 };
 
+// The tool schema minus `output_dir`, `images` and `masks`: the dashboard never takes paths.
+const { output_dir: _outputDir, ...savingFields } = saving;
 const generateBody = z.object({
-  prompt: z.string().trim().min(1).max(20_000),
-  model: z.string().min(1).optional(),
-  size: z
-    .string()
-    .regex(/^(auto|\d+x\d+)$/)
-    .optional(),
-  quality: z.enum(['auto', 'low', 'medium', 'high']).optional(),
-  output_format: z.enum(['webp', 'jpeg', 'png']).optional(),
+  prompt: prompt.trim().min(1),
+  model,
+  size,
+  quality,
+  output_format: outputFormat,
+  filename: savingFields.filename,
+  ephemeral: savingFields.ephemeral,
 });
 
 function send(data: unknown, status = 200): Response {
@@ -33,12 +35,17 @@ function fail(status: number, code: string, message: string): Response {
   return send({ error: { code, message } }, status);
 }
 
-function statusFor(error: ImageRouterError): number {
-  if (error.statusCode >= 400) return error.statusCode;
+export function statusFor(error: ImageRouterError): number {
+  if (error.statusCode >= 400) {
+    // Response.json throws a RangeError outside 200-599, so never echo a bogus upstream status.
+    return error.statusCode <= 599 ? error.statusCode : 502;
+  }
   if (error.code === 'TIMEOUT') return 504;
   if (error.code === 'CONNECTION_ERROR') return 502;
   // The request was fine; the server could not download or save the result.
   if (error.code === 'LOCAL_ERROR') return 500;
+  // No API key configured: the request never left, but the caller still needs to authenticate.
+  if (error.code === 'UNAUTHORIZED') return 401;
   return 400;
 }
 
@@ -103,7 +110,7 @@ export function createDashboardHandler(options: {
     return send({ ...result, name, fileUrl: fileUrl(name) });
   }
 
-  return async function handle(request: Request): Promise<Response> {
+  async function route(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
 
@@ -150,5 +157,15 @@ export function createDashboardHandler(options: {
     } catch (error) {
       return failFrom(error);
     }
+  }
+
+  return async function handle(request: Request): Promise<Response> {
+    const response = await route(request);
+    const { pathname } = new URL(request.url);
+    response.headers.set('x-content-type-options', 'nosniff');
+    if (pathname.startsWith('/api/') || pathname.startsWith('/files/')) {
+      response.headers.set('cross-origin-resource-policy', 'same-origin');
+    }
+    return response;
   };
 }

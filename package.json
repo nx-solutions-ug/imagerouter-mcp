@@ -1,6 +1,6 @@
 {
   "name": "@chronova/imagerouter-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server and local dashboard for generating images and videos through the ImageRouter API",
   "keywords": [
     "bun",
@@ -62,7 +62,7 @@
     "@types/node": "^26.6.4",
     "daisyui": "^5.7.47",
     "husky": "^9.1.7",
-    "oxfmt": "0.71.0",
+    "oxfmt": "0.72.0",
     "oxlint": "1.87.0",
     "semantic-release": "^25.0.9",
     "tailwindcss": "^4.3.3",

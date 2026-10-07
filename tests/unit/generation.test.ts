@@ -85,6 +85,13 @@ describe('runGeneration', () => {
     expect([...(await readFile(result.path))]).toEqual([1, 2, 3]);
   });
 
+  it('names an ephemeral result after its bytes, not the requested format', async () => {
+    // The live test model answers b64_ephemeral with JPEG bytes when no output_format is given.
+    const { deps } = await setup(() => json({ data: [{ b64_json: '/9j/4AAQSkZJRg==' }] }));
+    const result = await runGeneration(deps, 'image', { prompt: 'x', model: 'm', ephemeral: true });
+    expect(result.path).toMatch(/\.jpg$/);
+  });
+
   it('falls back to the default model per kind', async () => {
     const { deps, calls } = await setup(
       (url) =>

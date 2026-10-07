@@ -103,10 +103,15 @@ export async function runGeneration(
       if (entry.url) {
         const file = await client.download(entry.url);
         bytes = file.bytes;
-        extension = extensionFor({ contentType: file.contentType, url: entry.url, fallback });
+        extension = extensionFor({
+          contentType: file.contentType,
+          url: entry.url,
+          bytes,
+          fallback,
+        });
       } else {
         bytes = new Uint8Array(Buffer.from(entry.b64_json as string, 'base64'));
-        extension = extensionFor({ fallback });
+        extension = extensionFor({ bytes, fallback });
       }
       const name = buildFilename({ prompt: args.prompt, filename: args.filename, extension });
       const path = await saveBytes(dir, name, bytes);

@@ -31,6 +31,30 @@ describe('extensionFor', () => {
   });
 });
 
+describe('extensionFor with file signatures', () => {
+  const signatures: Record<string, number[]> = {
+    png: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    jpg: [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46],
+    gif: [0x47, 0x49, 0x46, 0x38, 0x39, 0x61],
+    webp: [0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50],
+    mp4: [0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d],
+    webm: [0x1a, 0x45, 0xdf, 0xa3],
+  };
+
+  it('detects the format from the bytes when no content type or URL says', () => {
+    for (const [extension, signature] of Object.entries(signatures)) {
+      expect(extensionFor({ bytes: new Uint8Array(signature), fallback: 'bin' })).toBe(extension);
+    }
+  });
+
+  it('ranks the bytes below content type and URL but above the fallback', () => {
+    const jpeg = new Uint8Array(signatures.jpg!);
+    expect(extensionFor({ contentType: 'image/png', bytes: jpeg, fallback: 'webp' })).toBe('png');
+    expect(extensionFor({ bytes: jpeg, fallback: 'webp' })).toBe('jpg');
+    expect(extensionFor({ bytes: new Uint8Array([1, 2, 3]), fallback: 'webp' })).toBe('webp');
+  });
+});
+
 describe('extension hardening', () => {
   const evil = '../../../../tmp/pwn';
 

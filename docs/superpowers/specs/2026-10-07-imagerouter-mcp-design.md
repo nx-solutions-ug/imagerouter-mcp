@@ -48,6 +48,13 @@ and live probes on 2026-10-07.
 - Errors: `{ "error": { "message", "type" } }`; 401 confirmed with type
   `unauthorized`. Other statuses are not documented.
 - Free models for smoke tests: `test/test` (image), `ir/test-video` (video).
+- Live run on 2026-10-07 (`bun run test:live`, 5/5): a multipart edit upload
+  whose file part carries no MIME type (`new File([bytes], name)`) is accepted.
+  `b64_ephemeral` entries are `{ revised_prompt, b64_json }` with raw image
+  bytes and no content type; `test/test` answers with JPEG bytes even though
+  no `output_format` was sent, so the format cannot be assumed (see Saving).
+  Its hosted URL (a GitHub raw file) is served as `image/png` although the
+  bytes are JPEG: a test-model quirk, so the header is still trusted for hosted files.
 
 ## Architecture
 
@@ -159,8 +166,15 @@ No input. Result: `{ remaining_credits, credit_usage, total_deposits }` as numbe
   created if missing. Name = `filename` argument (basename only, extension
   forced) or `<yyyyMMdd-HHmmss>-<slug of first 40 prompt chars>-<4 hex>.<ext>`.
   Extension comes from the downloaded `Content-Type`, falling back to the URL's
-  extension, then `output_format`. Existing files are never overwritten: a
+  extension, then the file signature of the bytes (png, jpeg, gif, webp, mp4,
+  webm; this is what names ephemeral results), then `output_format`, then
+  `webp`/`mp4`. An unrecognised type is saved as `.bin`. Existing files are never overwritten: a
   numeric suffix is added.
+- **Billing safety:** a `TIMEOUT` or `CONNECTION_ERROR` on a generation call
+  adds that the request may still be billed and to check `get_credits` before
+  retrying. After a billed generation, a download or save failure is a
+  `LOCAL_ERROR` that lists the hosted URLs (30 days) and the files already
+  saved, or says an ephemeral result cannot be fetched again.
 - **Multiple results:** every entry in `data` is saved; the result gains a
   `files` array and `path`/`url` point at the first.
 - **Annotations:** the three generation tools set `readOnlyHint: false`,
@@ -199,7 +213,7 @@ browser only ever talks to localhost.
 | `GET /api/status` | `{ hasApiKey, outputDir, defaultImageModel }` |
 | `GET /api/models` | Compact image-model list (same projection as `list_models`) |
 | `GET /api/credits` | Balance |
-| `POST /api/generate` | Body = `generate_image` input minus `output_dir`; returns the saved file |
+| `POST /api/generate` | Body = `generate_image` input minus `output_dir` (so `filename` and `ephemeral` are accepted); returns the saved file |
 | `GET /api/images` | Saved images in the output dir, newest first, paginated |
 | `GET /files/:name` | Serves one saved file |
 
@@ -213,7 +227,8 @@ Single page, vanilla TypeScript, Tailwind + daisyUI, bundled by Bun at build tim
 - **Header:** balance stat (remaining, used), refreshed on load and after each
   generation; a warning banner when no API key is configured.
 - **Generate panel:** prompt textarea, model picker (searchable, free models
-  badged, price shown, remembers the last choice in `localStorage`), size
+  badged, price shown, remembers the last choice in `localStorage`; with
+  nothing remembered it preselects the first free model), size
   (options from the model's `sizes` when it has them), quality, format, Generate
   button with a loading state, inline error alert.
 - **Result:** the new image with cost and latency, path and URL with copy buttons.
@@ -228,6 +243,9 @@ MCP-only for now.
 - Rejects requests whose `Host` is not `localhost`/`127.0.0.1` on the bound
   port, and `POST`s whose `Origin` is present and does not match. Without this
   any web page could spend credits through the user's browser.
+- Unknown CLI options are an error, not ignored.
+- Every response sends `X-Content-Type-Options: nosniff`; `/api/*` and
+  `/files/*` also send `Cross-Origin-Resource-Policy: same-origin`.
 - `/files/:name` accepts a bare filename only and resolves it inside the output
   directory; anything else is a 400.
 

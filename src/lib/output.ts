@@ -22,9 +22,32 @@ function normalise(extension: string | undefined): string | undefined {
   return clean && clean in MEDIA_TYPES ? clean : undefined;
 }
 
+function startsWith(bytes: Uint8Array, at: number, signature: number[]): boolean {
+  return signature.every((value, index) => bytes[at + index] === value);
+}
+
+// Ephemeral results carry no content type or URL, and the API does not always honour the
+// requested output_format, so the file signature is the only reliable source.
+function sniffExtension(bytes: Uint8Array | undefined): string | undefined {
+  if (!bytes) return undefined;
+  if (startsWith(bytes, 0, [0x89, 0x50, 0x4e, 0x47])) return 'png';
+  if (startsWith(bytes, 0, [0xff, 0xd8, 0xff])) return 'jpg';
+  if (startsWith(bytes, 0, [0x47, 0x49, 0x46, 0x38])) return 'gif';
+  if (
+    startsWith(bytes, 0, [0x52, 0x49, 0x46, 0x46]) &&
+    startsWith(bytes, 8, [0x57, 0x45, 0x42, 0x50])
+  ) {
+    return 'webp';
+  }
+  if (startsWith(bytes, 4, [0x66, 0x74, 0x79, 0x70])) return 'mp4';
+  if (startsWith(bytes, 0, [0x1a, 0x45, 0xdf, 0xa3])) return 'webm';
+  return undefined;
+}
+
 export function extensionFor(options: {
   contentType?: string | null;
   url?: string;
+  bytes?: Uint8Array;
   fallback: string;
 }): string {
   const mime = options.contentType?.split(';')[0].trim().toLowerCase();
@@ -39,7 +62,7 @@ export function extensionFor(options: {
       // Not a URL: use the fallback.
     }
   }
-  return normalise(options.fallback) ?? 'bin';
+  return sniffExtension(options.bytes) ?? normalise(options.fallback) ?? 'bin';
 }
 
 function pad(value: number): string {

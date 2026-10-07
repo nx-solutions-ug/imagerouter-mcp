@@ -20,6 +20,8 @@ export function parseDashboardArgs(
         throw new Error(`Invalid port: ${raw ?? '(missing)'}`);
       }
       port = parsed;
+    } else {
+      throw new Error(`Unknown option: ${arg}`);
     }
   }
   return { port, open };

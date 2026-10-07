@@ -76,7 +76,13 @@ function renderModels(): void {
       return new Option(price ? `${model.id} · ${price}` : model.id, model.id);
     }),
   );
-  if (previous && visible.some((model) => model.id === previous)) select.value = previous;
+  if (previous && visible.some((model) => model.id === previous)) {
+    select.value = previous;
+  } else {
+    // Never preselect a paid model by accident: prefer the first free one.
+    const free = visible.find((model) => model.min_price === 0);
+    if (free) select.value = free.id;
+  }
   renderModelOptions();
 }
 
@@ -137,11 +143,21 @@ function showResult(result: Generated): void {
   );
 }
 
+// Never rejects: a failed refresh is reported in the gallery area, not as a generation error.
 async function loadGallery(): Promise<void> {
-  const page = await api<{ total: number; items: GalleryItem[] }>('/api/images?limit=60');
+  const empty = el('gallery-empty');
+  let page: { total: number; items: GalleryItem[] };
+  try {
+    page = await api<{ total: number; items: GalleryItem[] }>('/api/images?limit=60');
+  } catch (error) {
+    empty.textContent = `Could not load the gallery: ${(error as Error).message}`;
+    empty.classList.remove('hidden');
+    return;
+  }
   const images = page.items.filter((item) => item.kind === 'image');
-  el('gallery-count').textContent = String(page.total);
-  el('gallery-empty').classList.toggle('hidden', images.length > 0);
+  el('gallery-count').textContent = String(images.length);
+  empty.textContent = 'Nothing generated yet.';
+  empty.classList.toggle('hidden', images.length > 0);
   el('gallery').replaceChildren(
     ...images.map((item) => {
       const button = document.createElement('button');
@@ -204,18 +220,27 @@ async function init(): Promise<void> {
   el('model').addEventListener('change', renderModelOptions);
   el('refresh-balance').addEventListener('click', () => void loadBalance());
 
-  const status = await api<{
-    hasApiKey: boolean;
-    outputDir: string;
-    defaultImageModel: string | null;
-  }>('/api/status');
-  el('key-warning').classList.toggle('hidden', status.hasApiKey);
-  el('gallery-dir').textContent = status.outputDir;
-  if (status.defaultImageModel && !remember(MODEL_KEY))
-    remember(MODEL_KEY, status.defaultImageModel);
+  let status: { hasApiKey: boolean; outputDir: string; defaultImageModel: string | null } | null =
+    null;
+  try {
+    status = await api<{ hasApiKey: boolean; outputDir: string; defaultImageModel: string | null }>(
+      '/api/status',
+    );
+  } catch (error) {
+    const alert = el('error');
+    alert.textContent = `Could not load status: ${(error as Error).message}`;
+    alert.classList.remove('hidden');
+  }
+  if (status) {
+    el('key-warning').classList.toggle('hidden', status.hasApiKey);
+    el('gallery-dir').textContent = status.outputDir;
+    if (status.defaultImageModel && !remember(MODEL_KEY)) {
+      remember(MODEL_KEY, status.defaultImageModel);
+    }
+    if (status.hasApiKey) void loadBalance();
+  }
 
   void loadGallery();
-  if (status.hasApiKey) void loadBalance();
   try {
     models = (await api<{ models: Model[] }>('/api/models')).models;
     renderModels();

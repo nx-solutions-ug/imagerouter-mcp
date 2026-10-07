@@ -19,4 +19,11 @@ describe('parseDashboardArgs', () => {
     expect(() => parseDashboardArgs(['--port', '70000'], 4477)).toThrow('Invalid port: 70000');
     expect(() => parseDashboardArgs(['--port'], 4477)).toThrow('Invalid port');
   });
+
+  it('rejects unknown options instead of ignoring them', () => {
+    expect(() => parseDashboardArgs(['--no-opne'], 4477)).toThrow('Unknown option: --no-opne');
+    expect(() => parseDashboardArgs(['--port', '5000', 'extra'], 4477)).toThrow(
+      'Unknown option: extra',
+    );
+  });
 });

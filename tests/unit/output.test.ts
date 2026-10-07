@@ -41,17 +41,25 @@ describe('extensionFor with file signatures', () => {
     webm: [0x1a, 0x45, 0xdf, 0xa3],
   };
 
-  it('detects the format from the bytes when no content type or URL says', () => {
+  it('detects the format from the bytes', () => {
     for (const [extension, signature] of Object.entries(signatures)) {
       expect(extensionFor({ bytes: new Uint8Array(signature), fallback: 'bin' })).toBe(extension);
     }
   });
 
-  it('ranks the bytes below content type and URL but above the fallback', () => {
+  it('trusts a recognised signature over the content type and the URL', () => {
     const jpeg = new Uint8Array(signatures.jpg!);
-    expect(extensionFor({ contentType: 'image/png', bytes: jpeg, fallback: 'webp' })).toBe('png');
-    expect(extensionFor({ bytes: jpeg, fallback: 'webp' })).toBe('jpg');
-    expect(extensionFor({ bytes: new Uint8Array([1, 2, 3]), fallback: 'webp' })).toBe('webp');
+    expect(extensionFor({ contentType: 'image/png', bytes: jpeg, fallback: 'webp' })).toBe('jpg');
+    expect(extensionFor({ url: 'http://x/a.png', bytes: jpeg, fallback: 'webp' })).toBe('jpg');
+  });
+
+  it('falls back to content type, URL and fallback when the bytes are not recognised', () => {
+    const unknown = new Uint8Array([1, 2, 3]);
+    expect(extensionFor({ contentType: 'image/png', bytes: unknown, fallback: 'webp' })).toBe(
+      'png',
+    );
+    expect(extensionFor({ url: 'http://x/a.gif', bytes: unknown, fallback: 'webp' })).toBe('gif');
+    expect(extensionFor({ bytes: unknown, fallback: 'webp' })).toBe('webp');
   });
 });
 

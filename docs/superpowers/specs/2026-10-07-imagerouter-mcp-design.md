@@ -54,7 +54,7 @@ and live probes on 2026-10-07.
   bytes and no content type; `test/test` answers with JPEG bytes even though
   no `output_format` was sent, so the format cannot be assumed (see Saving).
   Its hosted URL (a GitHub raw file) is served as `image/png` although the
-  bytes are JPEG: a test-model quirk, so the header is still trusted for hosted files.
+  bytes are JPEG, which is why the signature outranks the header.
 
 ## Architecture
 
@@ -165,10 +165,10 @@ No input. Result: `{ remaining_credits, credit_usage, total_deposits }` as numbe
 - **Saving (`output.ts`):** directory = `output_dir` argument → env → default,
   created if missing. Name = `filename` argument (basename only, extension
   forced) or `<yyyyMMdd-HHmmss>-<slug of first 40 prompt chars>-<4 hex>.<ext>`.
-  Extension comes from the downloaded `Content-Type`, falling back to the URL's
-  extension, then the file signature of the bytes (png, jpeg, gif, webp, mp4,
-  webm; this is what names ephemeral results), then `output_format`, then
-  `webp`/`mp4`. An unrecognised type is saved as `.bin`. Existing files are never overwritten: a
+  Extension comes from the file signature of the bytes (png, jpeg, gif, webp,
+  mp4, webm) when recognised, then the downloaded `Content-Type`, then the URL's
+  extension, then `output_format`, then `webp`/`mp4`. An unrecognised type is
+  saved as `.bin`. Existing files are never overwritten: a
   numeric suffix is added.
 - **Billing safety:** a `TIMEOUT` or `CONNECTION_ERROR` on a generation call
   adds that the request may still be billed and to check `get_credits` before

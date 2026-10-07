@@ -26,8 +26,8 @@ function startsWith(bytes: Uint8Array, at: number, signature: number[]): boolean
   return signature.every((value, index) => bytes[at + index] === value);
 }
 
-// Ephemeral results carry no content type or URL, and the API does not always honour the
-// requested output_format, so the file signature is the only reliable source.
+// The bytes are the only source that cannot be wrong: ephemeral results carry no content type,
+// the API does not always honour output_format, and hosted files can be mislabelled.
 function sniffExtension(bytes: Uint8Array | undefined): string | undefined {
   if (!bytes) return undefined;
   if (startsWith(bytes, 0, [0x89, 0x50, 0x4e, 0x47])) return 'png';
@@ -50,6 +50,9 @@ export function extensionFor(options: {
   bytes?: Uint8Array;
   fallback: string;
 }): string {
+  const sniffed = sniffExtension(options.bytes);
+  if (sniffed) return sniffed;
+
   const mime = options.contentType?.split(';')[0].trim().toLowerCase();
   const fromType = Object.entries(MEDIA_TYPES).find(([, type]) => type === mime)?.[0];
   if (fromType) return fromType;
@@ -62,7 +65,7 @@ export function extensionFor(options: {
       // Not a URL: use the fallback.
     }
   }
-  return sniffExtension(options.bytes) ?? normalise(options.fallback) ?? 'bin';
+  return normalise(options.fallback) ?? 'bin';
 }
 
 function pad(value: number): string {

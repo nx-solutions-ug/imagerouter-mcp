@@ -90,8 +90,8 @@ Two cases to know about:
 
 Without `filename` files are named `<yyyyMMdd-HHmmss>-<prompt slug>-<4 hex>.<ext>`.
 Existing files are never overwritten; a numeric suffix is added. The extension
-comes from the download's content type, then the URL, then the file's own
-signature (for ephemeral results), then `output_format`. A type that cannot be
+comes from the file's own signature when it is recognised, then the download's
+content type, then the URL, then `output_format`. A type that cannot be
 identified is saved as `.bin`.
 
 ### `generate_image`

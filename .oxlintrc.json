@@ -20,5 +20,18 @@
       }
     ]
   },
-  "ignorePatterns": ["node_modules/**", "dist/**", "build/**", "out/**", ".worktrees/**"]
+  "ignorePatterns": ["node_modules/**", "dist/**", "build/**", "out/**", ".worktrees/**"],
+  "overrides": [
+    {
+      "files": ["src/**"],
+      "rules": {
+        "no-console": [
+          "error",
+          {
+            "allow": ["error", "warn"]
+          }
+        ]
+      }
+    }
+  ]
 }

@@ -38,7 +38,9 @@ libraries below `src/lib/`.
 - `generate_image`, `edit_image` and `generate_video` set
   `readOnlyHint: false`: they spend credits and write files. `list_models` and
   `get_credits` set `readOnlyHint: true`.
-- Unknown result types are saved with a `.bin` extension rather than guessed.
+- Saved extensions come from the bytes' signature first, because both ephemeral
+  results and hosted files can be mislabelled; then Content-Type, URL, the
+  requested format. Unknown result types are saved as `.bin`.
 
 `src/lib/errors.ts` owns the status → code mapping. Extend the mapper, do not
 special-case a status at the call site.
@@ -46,8 +48,8 @@ special-case a status at the call site.
 ## stdout is the protocol
 
 In MCP mode nothing but protocol frames may reach stdout. Diagnostics go to
-stderr (`process.stderr.write`); no lint rule catches a stray `console.log`, so
-review for it. The dashboard mode prints its URL to stdout on purpose, because
+stderr (`process.stderr.write`). oxlint enforces `no-console` for `src/**`, allowing
+only `console.error` and `console.warn`. The dashboard mode prints its URL to stdout on purpose, because
 it speaks no protocol.
 
 ## No HTTP MCP transport

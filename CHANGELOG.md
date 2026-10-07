@@ -1,3 +1,11 @@
+## [1.0.1](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.0.0...v1.0.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* check the save destination and prompt before a paid request is sent ([b310541](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/b31054181aa13d95ab85ae2f0be7b8a890928ce1))
+* keep Enter and filtering from spending credits in the dashboard ([0263e3b](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/0263e3b318c0d90230d9aee851f9cfffc8c1cdde))
+
 # 1.0.0 (2026-10-07)
 
 

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ImageRouter Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="bg-base-200 min-h-screen">
+    <header class="navbar bg-base-100 shadow-sm px-4">
+      <div class="flex-1 text-lg font-semibold">ImageRouter</div>
+      <div class="stats bg-transparent">
+        <div class="stat py-1 px-4">
+          <div class="stat-title">Balance</div>
+          <div class="stat-value text-xl" id="balance">–</div>
+          <div class="stat-desc" id="usage"></div>
+        </div>
+      </div>
+      <button
+        class="btn btn-ghost btn-sm"
+        id="refresh-balance"
+        type="button"
+        aria-label="Refresh balance"
+      >
+        ↻
+      </button>
+    </header>
+
+    <main class="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[24rem_1fr]">
+      <div role="alert" class="alert alert-warning lg:col-span-2 hidden" id="key-warning">
+        <span>
+          No API key configured. Set <code>IMAGEROUTER_API_KEY</code> and restart the dashboard.
+        </span>
+      </div>
+
+      <form class="card bg-base-100 shadow-sm h-fit" id="generate-form">
+        <div class="card-body gap-3">
+          <h2 class="card-title">Generate</h2>
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Prompt</legend>
+            <textarea
+              class="textarea w-full h-32"
+              id="prompt"
+              maxlength="20000"
+              required
+            ></textarea>
+          </fieldset>
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Model</legend>
+            <input
+              class="input w-full mb-2"
+              id="model-search"
+              type="search"
+              placeholder="Filter models"
+              aria-label="Filter models"
+            />
+            <select class="select w-full" id="model" required aria-label="Model"></select>
+            <p class="label whitespace-normal" id="model-info"></p>
+          </fieldset>
+          <label class="label cursor-pointer justify-start gap-2 text-base-content">
+            <input type="checkbox" class="toggle toggle-sm" id="free-only" />
+            Free models only
+          </label>
+          <div class="grid grid-cols-3 gap-2">
+            <fieldset class="fieldset">
+              <legend class="fieldset-legend">Size</legend>
+              <select class="select select-sm w-full" id="size"></select>
+            </fieldset>
+            <fieldset class="fieldset">
+              <legend class="fieldset-legend">Quality</legend>
+              <select class="select select-sm w-full" id="quality">
+                <option>auto</option>
+                <option>low</option>
+                <option>medium</option>
+                <option>high</option>
+              </select>
+            </fieldset>
+            <fieldset class="fieldset">
+              <legend class="fieldset-legend">Format</legend>
+              <select class="select select-sm w-full" id="format">
+                <option>webp</option>
+                <option>png</option>
+                <option>jpeg</option>
+              </select>
+            </fieldset>
+          </div>
+          <div role="alert" class="alert alert-error hidden" id="error"></div>
+          <button class="btn btn-primary" id="submit" type="submit">Generate</button>
+        </div>
+      </form>
+
+      <section class="flex flex-col gap-4">
+        <div class="card bg-base-100 shadow-sm hidden" id="result">
+          <div class="card-body gap-3">
+            <img
+              class="rounded-box max-h-[70vh] w-full object-contain bg-base-200"
+              id="result-image"
+              alt=""
+            />
+            <div class="flex flex-wrap items-center gap-2 text-sm" id="result-meta"></div>
+          </div>
+        </div>
+        <div class="card bg-base-100 shadow-sm">
+          <div class="card-body">
+            <h2 class="card-title">Gallery <span class="badge" id="gallery-count">0</span></h2>
+            <p class="text-sm opacity-70 break-all" id="gallery-dir"></p>
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4" id="gallery"></div>
+            <p class="opacity-70 hidden" id="gallery-empty">Nothing generated yet.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <dialog class="modal" id="lightbox">
+      <div class="modal-box max-w-5xl p-2">
+        <img class="w-full rounded-box" id="lightbox-image" alt="" />
+        <p class="p-2 text-sm break-all" id="lightbox-name"></p>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

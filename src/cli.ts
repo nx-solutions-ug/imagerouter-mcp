@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { parseDashboardArgs, startDashboard } from './dashboard/serve.js';
 import { resolveConfig } from './lib/config.js';
 import { ImageRouterClient } from './lib/imagerouter-client.js';
 import { createServer } from './server.js';
@@ -33,8 +34,8 @@ async function main(argv: string[]): Promise<void> {
   const deps = { config, client: new ImageRouterClient(config) };
 
   if (argv[0] === 'dashboard') {
-    process.stderr.write('Dashboard is not built yet\n');
-    process.exit(1);
+    startDashboard(deps, parseDashboardArgs(argv.slice(1), config.dashboardPort));
+    return;
   }
   if (argv[0] !== undefined) {
     process.stderr.write(`Unknown command: ${argv[0]}\n\n${HELP}`);

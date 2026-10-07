@@ -32,7 +32,7 @@ function pngChunk(type: string, data: number[]): number[] {
 }
 
 // A complete, decodable 8-bit grayscale PNG.
-export function makePng(width: number, height: number): Uint8Array {
+export function makePng(width: number, height: number): Uint8Array<ArrayBuffer> {
   const rows = Buffer.alloc((width + 1) * height);
   return new Uint8Array([
     0x89,
@@ -49,7 +49,7 @@ export function makePng(width: number, height: number): Uint8Array {
   ]);
 }
 
-export function makeGif(width: number, height: number): Uint8Array {
+export function makeGif(width: number, height: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array([
     ...ascii('GIF89a'),
     ...u16le(width),
@@ -62,7 +62,7 @@ export function makeGif(width: number, height: number): Uint8Array {
 }
 
 // SOI, a JFIF APP0 segment, then the frame header. `marker` 0xc0 is baseline, 0xc2 progressive.
-export function makeJpeg(width: number, height: number, marker = 0xc0): Uint8Array {
+export function makeJpeg(width: number, height: number, marker = 0xc0): Uint8Array<ArrayBuffer> {
   return new Uint8Array([
     0xff,
     0xd8,
@@ -106,23 +106,23 @@ function riff(chunks: number[]): number[] {
   return [...ascii('RIFF'), ...u32le(chunks.length + 4), ...ascii('WEBP'), ...chunks];
 }
 
-export function makeWebpLossy(width: number, height: number): Uint8Array {
+export function makeWebpLossy(width: number, height: number): Uint8Array<ArrayBuffer> {
   const payload = [0x30, 0x01, 0x00, 0x9d, 0x01, 0x2a, ...u16le(width), ...u16le(height), 0, 0];
   return new Uint8Array(riff([...ascii('VP8 '), ...u32le(payload.length), ...payload]));
 }
 
-export function makeWebpLossless(width: number, height: number): Uint8Array {
+export function makeWebpLossless(width: number, height: number): Uint8Array<ArrayBuffer> {
   const packed = ((width - 1) & 0x3fff) | (((height - 1) & 0x3fff) << 14);
   const payload = [0x2f, ...u32le(packed >>> 0), 0, 0, 0, 0];
   return new Uint8Array(riff([...ascii('VP8L'), ...u32le(payload.length), ...payload]));
 }
 
-export function makeWebpExtended(width: number, height: number): Uint8Array {
+export function makeWebpExtended(width: number, height: number): Uint8Array<ArrayBuffer> {
   const payload = [0, 0, 0, 0, ...u24le(width - 1), ...u24le(height - 1)];
   return new Uint8Array(riff([...ascii('VP8X'), ...u32le(payload.length), ...payload]));
 }
 
-export function makeMp4(): Uint8Array {
+export function makeMp4(): Uint8Array<ArrayBuffer> {
   return new Uint8Array([
     ...u32be(24),
     ...ascii('ftypisom'),

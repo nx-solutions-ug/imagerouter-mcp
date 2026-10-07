@@ -1,0 +1,413 @@
+name: Claude Code Review
+
+# Two review paths, driven by Claude Code:
+#   dependency-review — Renovate/Dependabot PRs: changelog research + impact assessment
+#   code-review       — every other PR: full code quality review with inline comments
+# Prompts live in .claude/commands/{dependency-review,review-pr}.md.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, review_requested]
+  # These two carry the repository's secrets even for a pull request from a
+  # fork, unlike `pull_request`. The jobs they reach are gated on the actor
+  # being Jules exactly — a substring match on `jules` was satisfied by any
+  # account named to contain it, including one opening the pull request under
+  # review.
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+
+concurrency:
+  group: claude-code-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  # Never cancel an in-flight review run when the trigger is a review event —
+  # the replacement run is skipped by job conditions (review triggers are gated
+  # to Jules-authored activity), so cancelling wedges the run at CANCELLED and
+  # the PR never reaches a clean state. Only new pushes
+  # (pull_request/workflow_dispatch) may supersede an outdated review run;
+  # review-event runs queue behind the in-flight one instead.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  # ──────────────────────────────────────────────────────
+  # Dependency Bot PRs (Renovate, Dependabot)
+  # Researches changelogs and assesses breaking changes
+  # ──────────────────────────────────────────────────────
+  dependency-review:
+    name: Dependency Review
+    if: >-
+      github.event_name == 'pull_request' &&
+      (github.event.pull_request.user.login == 'renovate[bot]' || github.event.pull_request.user.login == 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          # The PR's own head, so the dependency manifests Claude inspects are
+          # the updated ones rather than the base branch's.
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        # Writes ~/.config/gh/hosts.yml, which is what authenticates `gh` inside
+        # Claude's Bash tool as well — not just the steps in this workflow.
+        run: echo "$APP_TOKEN" | gh auth login --with-token
+
+      - name: React to PR
+        run: gh api --method POST "/repos/${GH_REPO}/issues/${PR_NUMBER}/reactions" -f content='eyes'
+
+      - name: Check if this commit was already reviewed
+        id: review-skip
+        # triage-issue and label-pr are idempotent; this job was not, so a
+        # re-run or a repeat trigger posted a second review for the same commit.
+        # Anchor on the head SHA: a new push is a new commit and does get
+        # reviewed again.
+        run: |
+          set -euo pipefail
+          head_sha=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)
+          # `gh api --jq` takes a query string only — it has no --arg, so bind
+          # the SHA with real jq.
+          # shellcheck disable=SC2016  # $sha is a jq variable, bound via --arg
+          already=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            | jq --arg sha "$head_sha" \
+              '[.[] | select(.user.login | test("chronova-agent|claude")) | select(.commit_id == $sha)] | length')
+          if [ "$already" -gt 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Commit ${head_sha} already has an agent review — skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run dependency review
+        if: steps.review-skip.outputs.skip != 'true'
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          # This job exists precisely to review bot-authored PRs, and the action
+          # blocks bot actors by default — without this it never runs.
+          allowed_bots: 'renovate[bot],dependabot[bot]'
+          prompt: '/dependency-review ${{ github.event.pull_request.number }}'
+          claude_args: |
+            --model claude-sonnet-5
+            --allowedTools "Bash,Read,Grep,Glob,WebFetch,WebSearch"
+
+      - name: Surface Claude's failure message
+        # claude-code-action hides Claude's output unless show_full_output is
+        # enabled, which would dump every tool result into the log. Print only
+        # the final result line, which is where errors like
+        # "API Error: 401 OAuth access token is invalid" appear.
+        if: failure() && steps.claude.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$EXECUTION_FILE" ]; then
+            echo "::warning::No Claude execution log at ${EXECUTION_FILE}"
+            exit 0
+          fi
+          msg=$(jq -r '[.. | objects | select(.type? == "result") | .result // empty] | last // ""' "$EXECUTION_FILE")
+          if [ -n "$msg" ]; then
+            echo "::error::Claude reported: ${msg}"
+          else
+            echo "::warning::Claude execution log contained no result message."
+          fi
+
+      - name: Verify a review was actually posted
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          reviews=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq '[.[] | select(.user.login | test("chronova-agent|claude|\\[bot\\]"))] | length')
+          comments=$(gh api "repos/${GH_REPO}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq '[.[] | select(.user.login | test("chronova-agent|claude|\\[bot\\]"))] | length')
+          echo "Reviews: ${reviews}, comments: ${comments}"
+          if [ "$reviews" -eq 0 ] && [ "$comments" -eq 0 ]; then
+            echo "::error::Claude posted neither a review nor a comment on this dependency PR."
+            exit 1
+          fi
+
+  # ──────────────────────────────────────────────────────
+  # Gate for code PRs — decides whether a review is needed.
+  # Split out so the review job itself carries no step-level
+  # conditions and no runner setup happens on a skip.
+  # ──────────────────────────────────────────────────────
+  review-gate:
+    name: Review Gate
+    if: >-
+      (
+        github.event_name == 'pull_request' &&
+        github.event.action == 'review_requested'
+      ) ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.action != 'review_requested' &&
+        github.event.pull_request.user.login != 'renovate[bot]' &&
+        github.event.pull_request.user.login != 'dependabot[bot]'
+      ) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '') ||
+      (github.event_name == 'pull_request_review' && github.event.review.user.login == 'google-labs-jules[bot]') ||
+      (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'google-labs-jules[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.should-skip.outputs.skip }}
+      is_jules: ${{ steps.jules-detect.outputs.is_jules }}
+      jules_context: ${{ steps.jules-detect.outputs.jules_context }}
+
+    steps:
+      - name: Check if re-review is needed (synchronize only)
+        id: re-review-check
+        if: github.event.action == 'synchronize'
+        uses: actions/github-script@v9
+        with:
+          result-encoding: string
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+            const headSha = pr.head.sha;
+            const { data: commit } = await github.rest.repos.getCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: headSha
+            });
+            const author = commit.commit.author.name || '';
+            const committer = commit.commit.committer.name || '';
+            const agentMarkers = [
+              'claude', 'chronova-agent', 'omp-agent',
+              'opencode-agent', 'opencode', 'github-actions',
+            ];
+            const isAgentCommit = agentMarkers.some(
+              (m) => author.includes(m) || committer.includes(m)
+            );
+            return isAgentCommit ? 'false' : 'true';
+
+      - name: Detect Jules involvement
+        id: jules-detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          REVIEW_AUTHOR: ${{ github.event.review.user.login || '' }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login || '' }}
+        run: |
+          is_jules="false"
+          jules_context=""
+
+          # Jules authored the PR (google-labs-jules[bot])
+          if [[ "$PR_AUTHOR" == "google-labs-jules[bot]" ]]; then
+            is_jules="true"
+            jules_context="jules-authored-pr"
+          fi
+
+          # Jules created the PR on behalf of a human (body marker)
+          if [[ "$PR_BODY" == *"created automatically by Jules"* ]]; then
+            is_jules="true"
+            jules_context="jules-authored-pr"
+          fi
+
+          # Jules submitted a review
+          if [[ "$EVENT_NAME" == "pull_request_review" ]] && [[ "$REVIEW_AUTHOR" == "google-labs-jules[bot]" ]]; then
+            is_jules="true"
+            jules_context="jules-review-submitted"
+          fi
+
+          # Jules posted a review comment (suggestion)
+          if [[ "$EVENT_NAME" == "pull_request_review_comment" ]] && [[ "$COMMENT_AUTHOR" == "google-labs-jules[bot]" ]]; then
+            is_jules="true"
+            jules_context="jules-review-comment"
+          fi
+
+          echo "is_jules=${is_jules}" >> "$GITHUB_OUTPUT"
+          echo "jules_context=${jules_context}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to skip
+        id: should-skip
+        env:
+          ACTION: ${{ github.event.action || 'opened' }}
+          RE_REVIEW: ${{ steps.re-review-check.outputs.result || 'true' }}
+        run: |
+          skip="false"
+          # review_requested is an explicit human retrigger from the GitHub UI — never skip
+          if [[ "$ACTION" == "synchronize" ]] && [[ "$RE_REVIEW" == "false" ]]; then
+            skip="true"
+          fi
+          echo "skip=${skip}" >> "$GITHUB_OUTPUT"
+
+  # ──────────────────────────────────────────────────────
+  # Code PRs (human-authored & agent-authored)
+  # Full code quality review with duplicate detection
+  # ──────────────────────────────────────────────────────
+  code-review:
+    name: Code Review
+    needs: review-gate
+    if: needs.review-gate.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+      BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref || 'main' }}
+      # Consumed by .claude/commands/review-pr.md Step 0.5.
+      IS_JULES: ${{ needs.review-gate.outputs.is_jules }}
+      JULES_CONTEXT: ${{ needs.review-gate.outputs.jules_context }}
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          # Explicit PR head rather than the event's default ref. On
+          # pull_request_review and pull_request_review_comment events (the
+          # Jules paths) the default checkout is the base branch, so
+          # `git diff origin/<base>...HEAD` would report no changes at all and
+          # the review would run against an empty diff.
+          ref: refs/pull/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/head
+          fetch-depth: 0 # Required for git diff against base branch to prevent HTTP 406 on >300 files
+          persist-credentials: false
+
+      # The reviewer used to read the diff without ever being able to run the
+      # gates the diff has to pass: no node_modules meant `bun run lint` and
+      # `bun run type-check` failed, and reviews said so instead of verifying.
+      # Versions match test.yml, so what the reviewer sees is what the Lint and
+      # Type Check gates report.
+      #
+      # Installed BEFORE the app token exists, and the order is the security
+      # property. `bun install` runs the checked-out PR's own lifecycle
+      # scripts. On a plain `pull_request` from a fork GitHub withholds the
+      # secrets, but this workflow also triggers on `pull_request_review` and
+      # `pull_request_review_comment`, which carry them regardless of where the
+      # PR came from — and those paths check out the fork's own head even when
+      # the reviewer genuinely is Jules, which the gate below requires. The
+      # PR's code runs either way; installing first means it does not run next
+      # to a privileged token in the runner's gh config.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+
+      - name: Install dependencies
+        id: install
+        # A failing install must not cost the PR its review — a lockfile that
+        # will not resolve is itself worth reviewing. The step's outcome is
+        # handed to Claude as TOOLCHAIN_READY, and the prompt falls back to
+        # reading the diff when it is false.
+        continue-on-error: true
+        run: bun install --frozen-lockfile
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: echo "$APP_TOKEN" | gh auth login --with-token
+
+      - name: Install gh-pr-review extension
+        # Provides `gh pr-review`, which the prompt uses for inline review
+        # comments and GraphQL thread resolution.
+        run: gh extension install agynio/gh-pr-review --pin v1.6.2 --force
+
+      - name: React to PR
+        run: gh api --method POST "/repos/${GH_REPO}/issues/${PR_NUMBER}/reactions" -f content='eyes'
+
+      - name: Run code review
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        # Consumed by review-pr.md's gate step. Step-level, because job-level
+        # `env` cannot read `steps.*`.
+        env:
+          TOOLCHAIN_READY: ${{ steps.install.outcome == 'success' }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          # Jules review events and post-agent `synchronize` pushes are bot
+          # actors; without this the action blocks them and the PR is never
+          # re-reviewed.
+          allowed_bots: 'renovate[bot],dependabot[bot],google-labs-jules[bot],chronova-agent[bot]'
+          # Contributors without write access on public repos would otherwise
+          # never get a review. Replace "*" with explicit logins to tighten.
+          allowed_non_write_users: '*'
+          prompt: '/review-pr ${{ github.event.pull_request.number || github.event.inputs.pr_number }}'
+          claude_args: |
+            --model claude-sonnet-5
+            --allowedTools "Bash,Read,Grep,Glob,WebFetch"
+
+      - name: Surface Claude's failure message
+        # claude-code-action hides Claude's output unless show_full_output is
+        # enabled, which would dump every tool result into the log. Print only
+        # the final result line, which is where errors like
+        # "API Error: 401 OAuth access token is invalid" appear.
+        if: failure() && steps.claude.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$EXECUTION_FILE" ]; then
+            echo "::warning::No Claude execution log at ${EXECUTION_FILE}"
+            exit 0
+          fi
+          msg=$(jq -r '[.. | objects | select(.type? == "result") | .result // empty] | last // ""' "$EXECUTION_FILE")
+          if [ -n "$msg" ]; then
+            echo "::error::Claude reported: ${msg}"
+          else
+            echo "::warning::Claude execution log contained no result message."
+          fi
+
+      - name: Verify a review was actually posted
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet "origin/${BASE_REF}"...HEAD -- .github/workflows/claude-code-review.yml; then
+            echo "::notice::This PR modifies the review workflow itself, so review verification is skipped by design."
+            exit 0
+          fi
+          threads=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/comments?per_page=100" \
+            --jq '[.[] | select(.in_reply_to_id == null)] | length')
+          reviews=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq '[.[] | select(.user.login | test("chronova-agent|claude|\\[bot\\]"))] | length')
+          echo "Review threads: ${threads}, agent reviews: ${reviews}"
+          if [ "$threads" -eq 0 ] && [ "$reviews" -eq 0 ]; then
+            echo "::error::Claude posted neither a review nor any comment, and the PR has no" \
+                 "existing threads that would justify staying silent. The review did not run" \
+                 "properly — do not read this as an approval."
+            exit 1
+          fi

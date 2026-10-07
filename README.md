@@ -177,13 +177,15 @@ IMAGEROUTER_API_KEY=your-key bunx imagerouter-mcp dashboard
 
 Starts a page on `http://127.0.0.1:4477` and opens your browser. Options:
 
-- `--port <n>`: port to use (default `4477`, or `IMAGEROUTER_DASHBOARD_PORT`).
+- `--port <n>` or `--port=<n>`: port to use (default `4477`, or `IMAGEROUTER_DASHBOARD_PORT`).
 - `--no-open`: do not open a browser.
 
 Any other option is rejected. The dashboard shows your balance, a form to
 generate images (searchable model picker with prices and free models marked,
 size, quality, format), the result with its cost, latency, path and URL, and a
-gallery of everything in the output directory. With no remembered choice it
+gallery of the saved images in the output directory (videos and files of
+unrecognised type, saved as `.bin`, are not shown). When there is no remembered
+or configured model, or that model is not in the current filtered list, it
 preselects a free model so a first click never spends credits by accident.
 Editing and video are available through the MCP tools only.
 

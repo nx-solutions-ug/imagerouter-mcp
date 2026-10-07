@@ -1,4 +1,5 @@
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import type { GenerationKind } from './types.js';
 
 export interface GenerationRecord {
@@ -33,6 +34,8 @@ export interface GenerationRecord {
 
 // A record is a handful of fields; anything bigger is not one of ours.
 const MAX_RECORD_BYTES = 1_000_000;
+const MAX_PROMPT_LENGTH = 20_000;
+const MAX_STRING_LENGTH = 2048;
 const KINDS: readonly string[] = ['image', 'edit', 'video'];
 
 export function metadataPath(mediaPath: string): string {
@@ -58,7 +61,16 @@ export async function writeRecord(
       : undefined;
     const safe = { ...record, ...(inputs ? { inputs } : {}) };
     const path = metadataPath(mediaPath);
-    await writeFile(path, `${JSON.stringify(safe, null, 2)}\n`);
+    // Write beside the target and rename, so a reader never sees a half-written record. The
+    // random part keeps two processes apart; ".tmp" is not a media extension.
+    const temporary = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+    try {
+      await writeFile(temporary, `${JSON.stringify(safe, null, 2)}\n`, { flag: 'wx' });
+      await rename(temporary, path);
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
     return path;
   } catch {
     return null;
@@ -67,15 +79,20 @@ export async function writeRecord(
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-const text = (value: unknown): string | undefined =>
-  typeof value === 'string' ? value : undefined;
+// Longer strings are cut, not rejected: the record is still ours, only oversized.
+const text = (value: unknown, max = MAX_STRING_LENGTH): string | undefined =>
+  typeof value === 'string' ? value.slice(0, max) : undefined;
+const webUrl = (value: unknown): string | undefined => {
+  const candidate = text(value);
+  return candidate && /^https?:\/\//i.test(candidate) ? candidate : undefined;
+};
 const count = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 const whole = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 const strings = (value: unknown): string[] | undefined => {
   if (!Array.isArray(value)) return undefined;
-  const kept = value.filter((entry): entry is string => typeof entry === 'string');
+  const kept = value.flatMap((entry) => text(entry) ?? []);
   return kept.length > 0 ? kept : undefined;
 };
 
@@ -95,7 +112,7 @@ function parseRecord(raw: unknown): GenerationRecord | null {
   if (
     file === undefined ||
     created === undefined ||
-    model === undefined ||
+    !model ||
     bytes === undefined ||
     typeof raw.kind !== 'string' ||
     !KINDS.includes(raw.kind) ||
@@ -125,12 +142,12 @@ function parseRecord(raw: unknown): GenerationRecord | null {
     bytes,
     ephemeral: raw.ephemeral,
     ...compact({
-      prompt: text(raw.prompt),
+      prompt: text(raw.prompt, MAX_PROMPT_LENGTH),
       width: whole(raw.width),
       height: whole(raw.height),
       cost: count(raw.cost),
       latency_ms: count(raw.latency_ms),
-      url: text(raw.url),
+      url: webUrl(raw.url),
       index: whole(raw.index),
       count: whole(raw.count),
       inputs: Object.keys(inputs).length > 0 ? inputs : undefined,

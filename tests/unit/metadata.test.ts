@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -148,5 +148,83 @@ describe('metadata records', () => {
   it('refuses an absurdly large sidecar', async () => {
     const target = await sidecar(JSON.stringify({ ...record(), prompt: 'x'.repeat(2_000_000) }));
     expect(await readRecord(target)).toBeNull();
+  });
+
+  it('truncates long strings on read instead of rejecting the record', async () => {
+    const read = await readRecord(
+      await sidecar(
+        JSON.stringify({
+          ...record(),
+          prompt: 'p'.repeat(30_000),
+          model: 'm'.repeat(5000),
+          file: 'f'.repeat(5000),
+          requested: { size: 's'.repeat(5000) },
+          inputs: { images: ['i'.repeat(5000)] },
+        }),
+      ),
+    );
+    expect(read?.prompt).toHaveLength(20_000);
+    expect(read?.model).toHaveLength(2048);
+    expect(read?.file).toHaveLength(2048);
+    expect(read?.requested.size).toHaveLength(2048);
+    expect(read?.inputs?.images?.[0]).toHaveLength(2048);
+  });
+
+  it('requires a non-empty model', async () => {
+    expect(await readRecord(await sidecar(JSON.stringify({ ...record(), model: '' })))).toBeNull();
+  });
+
+  it('keeps only http(s) URLs', async () => {
+    for (const url of [
+      'javascript:alert(1)',
+      'data:text/html,x',
+      'file:///etc/passwd',
+      'ftp://x/a',
+      'cdn.test/a.png',
+      '',
+    ]) {
+      const read = await readRecord(await sidecar(JSON.stringify({ ...record(), url })));
+      expect({ url, parsed: read !== null }).toEqual({ url, parsed: true });
+      expect(read).not.toHaveProperty('url');
+    }
+    for (const url of ['http://cdn.test/a.png', 'HTTPS://cdn.test/a.png']) {
+      expect((await readRecord(await sidecar(JSON.stringify({ ...record(), url }))))?.url).toBe(
+        url,
+      );
+    }
+  });
+
+  it('writes atomically and leaves no temporary file behind', async () => {
+    const folder = await dir();
+    const target = join(folder, 'fox.jpg');
+    await writeRecord(target, record());
+    await writeRecord(target, record({ prompt: 'again' }));
+    expect(await readdir(folder)).toEqual(['fox.jpg.json']);
+    expect((await readRecord(target))?.prompt).toBe('again');
+  });
+
+  it('removes the temporary file when the sidecar cannot be put in place', async () => {
+    const folder = await dir();
+    const target = join(folder, 'fox.jpg');
+    await mkdir(metadataPath(target)); // rename onto a directory fails
+    await expect(writeRecord(target, record())).resolves.toBeNull();
+    expect(await readdir(folder)).toEqual(['fox.jpg.json']);
+  });
+
+  it('uses a temporary name that cannot be mistaken for media or collide', async () => {
+    const folder = await dir();
+    const seen = new Set<string>();
+    // Observe the temporary names through the directory while writes are in flight.
+    const target = join(folder, 'fox.jpg');
+    const writes = Array.from({ length: 20 }, () => writeRecord(target, record()));
+    for (let round = 0; round < 5; round += 1) {
+      for (const name of await readdir(folder)) seen.add(name);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    await Promise.all(writes);
+    const others = [...seen].filter((name) => name !== 'fox.jpg.json');
+    expect(others.every((name) => name.endsWith('.tmp'))).toBe(true);
+    expect((await readdir(folder)).toSorted()).toEqual(['fox.jpg.json']);
+    expect(await readRecord(target)).not.toBeNull();
   });
 });

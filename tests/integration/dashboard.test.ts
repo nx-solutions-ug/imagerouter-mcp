@@ -8,7 +8,7 @@ import { resolveConfig } from '../../src/lib/config.js';
 import { ImageRouterClient } from '../../src/lib/imagerouter-client.js';
 import { type GenerationRecord, metadataPath, writeRecord } from '../../src/lib/metadata.js';
 import { fakeFetch, json } from '../helpers/fake-fetch.js';
-import { makePng } from '../helpers/images.js';
+import { makeMp4, makePng } from '../helpers/images.js';
 
 const PORT = 4477;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
@@ -518,5 +518,21 @@ describe('dashboard generation records', () => {
     const gallery = await (await call('/api/images?q=a%20fox')).json();
     expect(gallery.total).toBe(1);
     expect(gallery.spent).toBe(0.02);
+  });
+
+  it('lists and counts images only, never a video with a costly sidecar', async () => {
+    const { call, add, outputDir } = await seeded();
+    await add('fox.png', { prompt: 'a fox', cost: 0.25 });
+    await add('clip.mp4', { kind: 'video', prompt: 'a fox runs', cost: 5 }, makeMp4());
+    await writeFile(join(outputDir, 'notes.json'), '{}');
+    const all = await get(call, '/api/images');
+    expect(all.items.map((item: { name: string }) => item.name)).toEqual(['fox.png']);
+    expect(all.total).toBe(1);
+    expect(all.spent).toBe(0.25);
+    const searched = await get(call, '/api/images?q=fox');
+    expect(searched).toMatchObject({ total: 1, spent: 0.25 });
+    const paged = await get(call, '/api/images?limit=1&offset=1');
+    expect(paged).toMatchObject({ total: 1, spent: 0.25, items: [] });
+    expect((await get(call, '/api/images?q=runs')).total).toBe(0);
   });
 });

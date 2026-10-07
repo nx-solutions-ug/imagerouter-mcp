@@ -41,7 +41,7 @@ describe('readDimensions', () => {
         seed = (seed * 1103515245 + 12345) & 0x7fffffff;
         bytes[index] = seed >> 16;
       }
-      expect(() => readDimensions(bytes)).not.toThrow();
+      expect(readDimensions(bytes)).toBeNull();
     }
   });
 

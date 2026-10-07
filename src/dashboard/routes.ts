@@ -92,12 +92,14 @@ function spentOn(records: Array<GenerationRecord | null>): number {
 
 async function listImages(dir: string, options: { query: string; limit: number; offset: number }) {
   const everything = await listSaved(dir, { limit: Number.MAX_SAFE_INTEGER });
+  // Videos share the directory but are not part of the image gallery, its total or its spend.
+  const images = everything.items.filter((item) => item.kind === 'image');
   const records: Array<GenerationRecord | null> = [];
-  for (let start = 0; start < everything.items.length; start += READ_BATCH) {
-    const batch = everything.items.slice(start, start + READ_BATCH);
+  for (let start = 0; start < images.length; start += READ_BATCH) {
+    const batch = images.slice(start, start + READ_BATCH);
     records.push(...(await Promise.all(batch.map((item) => recordOf(item.path)))));
   }
-  const found = everything.items
+  const found = images
     .map((item, index) => ({ item, record: records[index] ?? null }))
     .filter(({ item, record }) => matches(item, record, options.query));
   return {

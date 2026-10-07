@@ -980,7 +980,7 @@ describe('buildFilename', () => {
   it('uses timestamp, prompt slug and suffix', () => {
     expect(
       buildFilename({ prompt: 'A red Fox, jumping!  Over snow and much more text here', extension: 'webp', now, suffix: 'ab12' }),
-    ).toBe('20261007-140509-a-red-fox-jumping-over-snow-and-much-mor-ab12.webp');
+    ).toBe('20261007-140509-a-red-fox-jumping-over-snow-and-much-ab12.webp');
   });
 
   it('survives prompts with no filename-safe characters and missing prompts', () => {

@@ -1,8 +1,10 @@
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { expandHome } from './config.js';
+import { readDimensions } from './dimensions.js';
 import { ImageRouterError } from './errors.js';
 import type { ImageRouterClient } from './imagerouter-client.js';
 import { buildRequestBody } from './inputs.js';
+import { type GenerationRecord, writeRecord } from './metadata.js';
 import { buildFilename, ensureWritableDir, extensionFor, saveBytes } from './output.js';
 import type {
   Config,
@@ -66,6 +68,59 @@ function recoveryError(
   return new ImageRouterError(parts.join(' '), 'LOCAL_ERROR');
 }
 
+// Dimensions and sidecar for one saved file. The request is already billed, so nothing in here
+// may fail the generation: any problem leaves the optional fields out.
+async function describeSaved(options: {
+  path: string;
+  bytes: Uint8Array;
+  url?: string;
+  kind: GenerationKind;
+  model: string;
+  args: GenerationArgs;
+  cost?: number;
+  latency?: number;
+  index: number;
+  count: number;
+}): Promise<Pick<SavedFile, 'width' | 'height' | 'metadata_path'>> {
+  try {
+    const { args, bytes, path, url } = options;
+    const isVideo = options.kind === 'video';
+    const size = readDimensions(bytes);
+    const inputs = {
+      ...(args.images?.length ? { images: args.images } : {}),
+      ...(args.masks?.length ? { masks: args.masks } : {}),
+    };
+    const record: GenerationRecord = {
+      version: 1,
+      file: basename(path),
+      kind: options.kind,
+      created: new Date().toISOString(),
+      model: options.model,
+      ...(args.prompt === undefined ? {} : { prompt: args.prompt }),
+      requested: {
+        ...(args.size === undefined ? {} : { size: args.size }),
+        ...(args.quality === undefined || isVideo ? {} : { quality: args.quality }),
+        ...(args.output_format === undefined || isVideo
+          ? {}
+          : { output_format: args.output_format }),
+        ...(args.seconds === undefined || !isVideo ? {} : { seconds: args.seconds }),
+      },
+      ...size,
+      bytes: bytes.length,
+      ...(options.cost === undefined ? {} : { cost: options.cost }),
+      ...(options.latency === undefined ? {} : { latency_ms: options.latency }),
+      ...(url ? { url } : {}),
+      ephemeral: Boolean(args.ephemeral),
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+      ...(options.count > 1 ? { index: options.index, count: options.count } : {}),
+    };
+    const metadataPath = await writeRecord(path, record);
+    return { ...size, ...(metadataPath ? { metadata_path: metadataPath } : {}) };
+  } catch {
+    return {};
+  }
+}
+
 export async function runGeneration(
   deps: Deps,
   kind: GenerationKind,
@@ -117,7 +172,19 @@ export async function runGeneration(
       }
       const name = buildFilename({ prompt: args.prompt, filename: args.filename, extension });
       const path = await saveBytes(dir, name, bytes);
-      files.push(entry.url ? { path, url: entry.url } : { path });
+      const described = await describeSaved({
+        path,
+        bytes,
+        url: entry.url,
+        kind,
+        model,
+        args,
+        cost: response.cost,
+        latency: response.latency,
+        index: files.length,
+        count: entries.length,
+      });
+      files.push({ path, ...(entry.url ? { url: entry.url } : {}), ...described });
     }
   } catch (error) {
     throw recoveryError(error, entries, files);

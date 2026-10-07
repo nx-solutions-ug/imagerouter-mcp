@@ -39,6 +39,19 @@ the absolute path to `bunx` (often `/home/you/.bun/bin/bunx`) as `command`.
 Without a key the server still starts and `list_models` works; the other tools
 return an `UNAUTHORIZED` error that names `IMAGEROUTER_API_KEY`.
 
+### Updating
+
+`bunx` keeps using the version it downloaded first, so a new release does not
+reach you on its own. Run the newest release once with the `@latest` tag, which
+also refreshes the cached copy:
+
+```bash
+bunx @chronova/imagerouter-mcp@latest --version
+```
+
+To always start the newest release, put `@chronova/imagerouter-mcp@latest` in the
+commands above instead; `bunx` then checks the registry on every start.
+
 ### From source
 
 ```bash
@@ -109,9 +122,19 @@ or `WIDTHxHEIGHT`), `quality` (`auto|low|medium|high`), `output_format`
   "url": "https://storage.imagerouter.io/....webp",
   "model": "black-forest-labs/FLUX-1-schnell:free",
   "cost": 0,
-  "latency_ms": 2140
+  "latency_ms": 2140,
+  "width": 1024,
+  "height": 1024,
+  "metadata_path": "/home/you/Pictures/imagerouter/20261007-140509-a-fox-in-snow-3f9a.webp.json"
 }
 ```
+
+`width` and `height` are the actual pixels, read from the saved file (omitted
+for video and formats that are not recognised). Every saved file also gets a
+[metadata file](#where-files-go-and-what-is-public) next to it;
+`metadata_path` names the one of the first file and is omitted if it could not
+be written. In a `files` array each entry carries its own `width`, `height` and
+`metadata_path`.
 
 ### `edit_image`
 
@@ -175,7 +198,7 @@ No arguments.
 ## Dashboard
 
 ```bash
-IMAGEROUTER_API_KEY=your-key bunx @chronova/imagerouter-mcp dashboard
+IMAGEROUTER_API_KEY=your-key bunx @chronova/imagerouter-mcp@latest dashboard
 ```
 
 Starts a page on `http://127.0.0.1:4477` and opens your browser. Options:
@@ -195,6 +218,22 @@ accident; when the filter leaves no free model, the picker shows a disabled
 choice is only changed by you and by a successful generation, so clearing the
 filter brings it back.
 Editing and video are available through the MCP tools only.
+
+Images that have a metadata file show their model and pixel size under the
+thumbnail, with the prompt as tooltip. Click an image for its details: prompt,
+model, requested size and actual pixels, quality, format, cost, latency,
+creation time and file name, with buttons to copy the prompt, the path and the
+hosted URL, and **Use these settings**, which loads the prompt, model, size,
+quality and format into the form (it never submits it; if the recorded model is
+no longer offered, the other fields are still loaded and you are told). The
+search box above the gallery filters by prompt, model or file name, and
+"Spent $X.XX on N images" next to the count sums the recorded costs of all N
+matching images (not only the tiles shown), counting a multi-result request once;
+videos are never listed or counted. **Use these settings** sets the prompt, size,
+quality and format to the recorded values, or to neutral defaults (empty prompt,
+`auto`, `auto`, `webp`) where the record has none or the model does not offer them, and
+is offered for images only, not for edits or videos. Images without a metadata
+file (for example from before this feature) still show, without details.
 
 It listens on `127.0.0.1` only and answers only requests addressed to
 `localhost` or `127.0.0.1` on its own port. Cross-site POSTs are refused and
@@ -222,6 +261,20 @@ ImageRouter also stores each result for 30 days at a hosted URL that anyone
 holding the link can open. Use `ephemeral: true` when the content must not be
 stored on ImageRouter; you then get only the local file and no URL, and the
 result cannot be fetched again if saving fails.
+
+Next to every saved file `X` the server writes `X.json` (for example
+`fox.jpg.json`) with the prompt, model, requested size, quality and format, the
+actual pixel size, byte size, cost and latency of the request, the hosted URL,
+whether it was ephemeral, the input images and masks you passed (a data URI is
+stored as the literal `data-uri`, never its content), the creation time and, for
+a request that returned several files, the `index` and `count`. Each file of such
+a request carries the same `cost`, the cost of the whole request. **The prompt is
+stored in plain text in the output directory, also for `ephemeral` requests**,
+which only skip ImageRouter's storage; do not put a prompt there that you would not
+leave on disk. The metadata file is best-effort: if it cannot be written the
+generation still succeeds and `metadata_path` is left out. Delete the `.json` to
+forget a record; the sidecar file itself is not served by the dashboard and not shown as an image
+(its contents are returned by `/api/images`).
 
 ## Development
 

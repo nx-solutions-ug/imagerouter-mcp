@@ -90,6 +90,22 @@ function isBareFilename(name: string): boolean {
   );
 }
 
+// Longest complete file name we create. Filesystems allow 255 bytes, and the "-N" collision suffix
+// and the ".json" sidecar still have to fit after this.
+const MAX_FILENAME_BYTES = 200;
+
+// Cuts on a code point boundary so the result is always valid UTF-8.
+function fitStem(stem: string, extension: string): string {
+  let room = MAX_FILENAME_BYTES - Buffer.byteLength(`.${extension}`);
+  let fitted = '';
+  for (const char of stem) {
+    room -= Buffer.byteLength(char);
+    if (room < 0) break;
+    fitted += char;
+  }
+  return fitted;
+}
+
 export function buildFilename(options: {
   prompt?: string;
   filename?: string;
@@ -101,7 +117,8 @@ export function buildFilename(options: {
   if (options.filename) {
     const base = basename(options.filename.replaceAll('\\', '/'));
     const stem = stripUnsafeCharacters(base.slice(0, base.length - extname(base).length));
-    if (stem && stem !== '.' && stem !== '..') return `${stem}.${extension}`;
+    const fitted = fitStem(stem, extension);
+    if (fitted && fitted !== '.' && fitted !== '..') return `${fitted}.${extension}`;
   }
 
   const now = options.now ?? new Date();
@@ -114,7 +131,7 @@ export function buildFilename(options: {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   const suffix = options.suffix ?? randomBytes(2).toString('hex');
-  return [stamp, slug, suffix].filter(Boolean).join('-') + `.${extension}`;
+  return `${fitStem([stamp, slug, suffix].filter(Boolean).join('-'), extension)}.${extension}`;
 }
 
 export async function saveBytes(dir: string, name: string, bytes: Uint8Array): Promise<string> {
@@ -145,7 +162,7 @@ export async function saveBytes(dir: string, name: string, bytes: Uint8Array): P
 export async function ensureWritableDir(dir: string): Promise<void> {
   try {
     await mkdir(dir, { recursive: true });
-    await access(dir, constants.W_OK);
+    await access(dir, constants.W_OK | constants.X_OK);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
     throw new ImageRouterError(`Cannot write to output directory ${dir} (${code}).`, 'LOCAL_ERROR');

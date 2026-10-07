@@ -180,6 +180,26 @@ No input. Result: `{ remaining_credits, credit_usage, total_deposits }` as numbe
 - **Annotations:** the three generation tools set `readOnlyHint: false`,
   `openWorldHint: true`; `list_models` and `get_credits` set `readOnlyHint: true`.
 
+## Generation records
+
+Every saved result `X` gets a sidecar `X.json` next to it (`src/lib/metadata.ts`,
+`GenerationRecord`, `version: 1`): `file`, `kind`, `created`, resolved `model`,
+`prompt`, `requested` (`size`, `quality`, `output_format`, `seconds`), actual
+`width`/`height` (read from the saved bytes by `src/lib/dimensions.ts`: PNG, GIF,
+JPEG, WebP; absent for video), `bytes`, `cost`, `latency_ms`, `url` (absent when
+ephemeral), `ephemeral`, `inputs` (data URIs replaced by `data-uri`) and, for a
+multi-result request, `index`/`count`. `cost` is the request's cost and is
+repeated on each sidecar, so a reader counts only `index` 0 or absent.
+
+`runGeneration` writes the sidecar right after each file is saved. Writing is
+best-effort (`null` on failure, never throws): the request is already billed. The
+result gains `width`, `height`, `metadata_path` and the same per entry of `files`.
+Sidecars are written atomically (temporary file, then rename). Records are untrusted on
+read: types are validated, wrong-typed optional fields dropped, strings capped (prompt
+20000, others 2048), `model` must be non-empty and `url` must be http(s). Prompts are stored in plain text in the output directory, also for
+`ephemeral` requests. Out of scope: deleting or editing records, a central
+history, records for earlier images.
+
 ## Errors
 
 `errors.ts` maps HTTP status to a code and keeps the API's own message:
@@ -213,8 +233,8 @@ browser only ever talks to localhost.
 | `GET /api/status` | `{ hasApiKey, outputDir, defaultImageModel }` |
 | `GET /api/models` | Compact image-model list (same projection as `list_models`) |
 | `GET /api/credits` | Balance |
-| `POST /api/generate` | Body = `generate_image` input minus `output_dir` (so `filename` and `ephemeral` are accepted); returns the saved file |
-| `GET /api/images` | Saved images in the output dir, newest first, paginated |
+| `POST /api/generate` | Body = `generate_image` input minus `output_dir` (so `filename` and `ephemeral` are accepted); returns the saved file, `width`/`height`, `metadata_path` and the first file's `record` |
+| `GET /api/images` | Saved images (videos are excluded) in the output dir, newest first, paginated; each with its `record` or `null`; `?q=` filters (case-insensitive) by prompt, model, file name before paging; `total` counts matching images; `spent` sums the cost of all matching images, a multi-result request once |
 | `GET /files/:name` | Serves one saved file |
 
 Route handlers call the same `ImageRouterClient`, `models.ts` and `output.ts`
@@ -231,8 +251,16 @@ Single page, vanilla TypeScript, Tailwind + daisyUI, bundled by Bun at build tim
   nothing remembered it preselects the first free model), size
   (options from the model's `sizes` when it has them), quality, format, Generate
   button with a loading state, inline error alert.
-- **Result:** the new image with cost and latency, path and URL with copy buttons.
-- **Gallery:** grid of images already in the output directory; click to enlarge.
+- **Result:** the new image with model, actual size, cost and latency, a Details
+  button, path and URL with copy buttons.
+- **Gallery:** grid of images already in the output directory; a tile shows model
+  and pixel size (prompt as tooltip) when a record exists. A search box filters by
+  prompt, model or file name (debounced, Enter never submits the form); the count
+  is accompanied by "Spent $X.XX on N images" (N = all matches). Click opens the detail view:
+  full record, Copy prompt/path/URL, and **Use these settings** (images only), which
+  loads prompt, model, size, quality and format into the form without submitting it,
+  resetting any field the record lacks to a neutral default.
+  Record data reaches the DOM only through `textContent`/`Option`/property setters.
 
 Scope is image generation and balance, as asked. Editing and video stay
 MCP-only for now.

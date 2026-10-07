@@ -63,6 +63,11 @@ export interface Credits {
 export interface SavedFile {
   path: string;
   url?: string;
+  /** Actual pixels, read from the saved bytes; absent for video and unrecognised formats. */
+  width?: number;
+  height?: number;
+  /** The sidecar record next to the file; absent when it could not be written. */
+  metadata_path?: string;
 }
 
 export interface GenerationResult {
@@ -71,5 +76,9 @@ export interface GenerationResult {
   model: string;
   cost?: number;
   latency_ms?: number;
+  /** Dimensions and sidecar path of the first file. */
+  width?: number;
+  height?: number;
+  metadata_path?: string;
   files?: SavedFile[];
 }

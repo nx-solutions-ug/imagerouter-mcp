@@ -80,6 +80,37 @@ describe('extension hardening', () => {
   });
 });
 
+describe('buildFilename byte limit', () => {
+  const bytes = (name: string) => Buffer.byteLength(name, 'utf8');
+  const validUtf8 = (name: string) =>
+    new TextDecoder('utf-8', { fatal: true }).decode(new TextEncoder().encode(name)) === name;
+
+  it.each([
+    ['ü'.repeat(200), 'webp'],
+    ['狐'.repeat(300), 'png'],
+    ['🦊'.repeat(150), 'jpg'],
+    ['a'.repeat(500), 'mp4'],
+  ])('keeps a long requested name within 200 bytes (%#)', (filename, extension) => {
+    const name = buildFilename({ filename, extension });
+    expect(bytes(name)).toBeLessThanOrEqual(200);
+    expect(name.endsWith(`.${extension}`)).toBe(true);
+    expect(validUtf8(name)).toBe(true);
+    expect(name).not.toContain('\uFFFD');
+    expect(name.length).toBeGreaterThan(extension.length + 1);
+    // Room for a "-N" collision suffix and the ".json" sidecar inside the 255-byte limit.
+    expect(bytes(`${name}-99.json`)).toBeLessThanOrEqual(255);
+  });
+
+  it('cuts on a character boundary and keeps as much as fits', () => {
+    const name = buildFilename({ filename: '狐'.repeat(300), extension: 'png' });
+    expect(name).toBe(`${'狐'.repeat(65)}.png`);
+  });
+
+  it('leaves short names alone', () => {
+    expect(buildFilename({ filename: 'hero', extension: 'png' })).toBe('hero.png');
+  });
+});
+
 describe('buildFilename', () => {
   it('uses timestamp, prompt slug and suffix', () => {
     expect(

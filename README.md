@@ -13,7 +13,7 @@ Create an API key at <https://imagerouter.io/api-keys>, then register the server
 Claude Code:
 
 ```bash
-claude mcp add imagerouter --env IMAGEROUTER_API_KEY=your-key -- bunx imagerouter-mcp
+claude mcp add imagerouter --env IMAGEROUTER_API_KEY=your-key -- bunx @chronova/imagerouter-mcp
 ```
 
 Claude Desktop or any client that takes a JSON config:
@@ -23,7 +23,7 @@ Claude Desktop or any client that takes a JSON config:
   "mcpServers": {
     "imagerouter": {
       "command": "bunx",
-      "args": ["imagerouter-mcp"],
+      "args": ["@chronova/imagerouter-mcp"],
       "env": {
         "IMAGEROUTER_API_KEY": "your-key",
         "IMAGEROUTER_DEFAULT_IMAGE_MODEL": "black-forest-labs/FLUX-1-schnell:free"
@@ -46,7 +46,7 @@ bun run build
 ```
 
 Then use `bun /path/to/imagerouter-mcp/dist/cli.js` wherever the examples above
-say `bunx imagerouter-mcp`, for example:
+say `bunx @chronova/imagerouter-mcp`, for example:
 
 ```bash
 claude mcp add imagerouter --env IMAGEROUTER_API_KEY=your-key -- bun /path/to/imagerouter-mcp/dist/cli.js
@@ -172,7 +172,7 @@ No arguments.
 ## Dashboard
 
 ```bash
-IMAGEROUTER_API_KEY=your-key bunx imagerouter-mcp dashboard
+IMAGEROUTER_API_KEY=your-key bunx @chronova/imagerouter-mcp dashboard
 ```
 
 Starts a page on `http://127.0.0.1:4477` and opens your browser. Options:

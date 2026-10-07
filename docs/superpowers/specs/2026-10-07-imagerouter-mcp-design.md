@@ -1,7 +1,7 @@
 # imagerouter-mcp — design
 
 Date: 2026-10-07
-Repo: `nx-solutions-ug/imagerouter-mcp` (public) · npm: `imagerouter-mcp` (unscoped)
+Repo: `nx-solutions-ug/imagerouter-mcp` (public) · npm: `@chronova/imagerouter-mcp` (bin `imagerouter-mcp`)
 
 ## Goal
 
@@ -11,8 +11,8 @@ pick a model, and check the account balance. Ship a small local dashboard in the
 same package for doing the same by hand: generate images, browse what was
 generated, see the balance.
 
-Success means: `bunx imagerouter-mcp` works as a stdio MCP server with five
-tools, `bunx imagerouter-mcp dashboard` opens a working local UI, and the repo
+Success means: `bunx @chronova/imagerouter-mcp` works as a stdio MCP server with five
+tools, `bunx @chronova/imagerouter-mcp dashboard` opens a working local UI, and the repo
 carries the chronova-family pipeline and releases to npm from `main`.
 
 ## Decisions taken with the user

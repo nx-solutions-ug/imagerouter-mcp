@@ -39,7 +39,7 @@ export function extensionFor(options: {
       // Not a URL: use the fallback.
     }
   }
-  return normalise(options.fallback) ?? options.fallback;
+  return normalise(options.fallback) ?? 'bin';
 }
 
 function pad(value: number): string {
@@ -52,6 +52,17 @@ function stripUnsafeCharacters(value: string): string {
     .join('');
 }
 
+function isBareFilename(name: string): boolean {
+  return (
+    name !== '' &&
+    name !== '.' &&
+    name !== '..' &&
+    name === basename(name) &&
+    !name.includes('\\') &&
+    !name.includes('\0')
+  );
+}
+
 export function buildFilename(options: {
   prompt?: string;
   filename?: string;
@@ -59,10 +70,11 @@ export function buildFilename(options: {
   now?: Date;
   suffix?: string;
 }): string {
+  const extension = /^[a-z0-9]+$/.test(options.extension) ? options.extension : 'bin';
   if (options.filename) {
     const base = basename(options.filename.replaceAll('\\', '/'));
     const stem = stripUnsafeCharacters(base.slice(0, base.length - extname(base).length));
-    if (stem && stem !== '.' && stem !== '..') return `${stem}.${options.extension}`;
+    if (stem && stem !== '.' && stem !== '..') return `${stem}.${extension}`;
   }
 
   const now = options.now ?? new Date();
@@ -75,10 +87,13 @@ export function buildFilename(options: {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   const suffix = options.suffix ?? randomBytes(2).toString('hex');
-  return [stamp, slug, suffix].filter(Boolean).join('-') + `.${options.extension}`;
+  return [stamp, slug, suffix].filter(Boolean).join('-') + `.${extension}`;
 }
 
 export async function saveBytes(dir: string, name: string, bytes: Uint8Array): Promise<string> {
+  if (!isBareFilename(name)) {
+    throw new ImageRouterError(`Refusing to save to unsafe file name ${name}.`, 'LOCAL_ERROR');
+  }
   const extension = extname(name);
   const stem = name.slice(0, name.length - extension.length);
   try {
@@ -135,8 +150,6 @@ export async function listSaved(
 }
 
 export function resolveSavedFile(dir: string, name: string): string | null {
-  if (!name || name !== basename(name) || name.includes('\\') || name === '.' || name === '..') {
-    return null;
-  }
+  if (!isBareFilename(name)) return null;
   return normalise(extname(name)) ? join(dir, name) : null;
 }

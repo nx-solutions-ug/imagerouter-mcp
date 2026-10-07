@@ -31,6 +31,23 @@ describe('extensionFor', () => {
   });
 });
 
+describe('extension hardening', () => {
+  const evil = '../../../../tmp/pwn';
+
+  it('never returns an extension outside the known media types', () => {
+    expect(extensionFor({ contentType: null, fallback: evil })).toBe('bin');
+    expect(
+      extensionFor({ contentType: 'text/html', url: 'http://x/a.html', fallback: 'x/y' }),
+    ).toBe('bin');
+  });
+
+  it('never emits a path through the extension', () => {
+    const name = buildFilename({ extension: evil, now, suffix: 'ab12' });
+    expect(name).toBe('20261007-140509-ab12.bin');
+    expect(buildFilename({ filename: 'hero', extension: evil })).toBe('hero.bin');
+  });
+});
+
 describe('buildFilename', () => {
   it('uses timestamp, prompt slug and suffix', () => {
     expect(
@@ -77,6 +94,17 @@ describe('saveBytes', () => {
     expect(await readdir(dir)).toHaveLength(3);
   });
 
+  it('refuses names that are not bare filenames', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ir-out-'));
+    const dir = join(root, 'out');
+    for (const name of ['../x.png', 'a/b.png', 'a\\b.png', 'a\0b.png', '..', '.', '']) {
+      await expect(saveBytes(dir, name, new Uint8Array([1]))).rejects.toMatchObject({
+        code: 'LOCAL_ERROR',
+      });
+    }
+    expect(await readdir(root)).toEqual([]);
+  });
+
   it('reports an unwritable directory without a stack trace', async () => {
     const file = join(await mkdtemp(join(tmpdir(), 'ir-out-')), 'file');
     await writeFile(file, 'x');
@@ -97,7 +125,7 @@ describe('listSaved', () => {
     const all = await listSaved(dir);
     expect(all.total).toBe(3);
     expect(all.items.map((item) => item.name)).toEqual(['new.webp', 'mid.mp4', 'old.png']);
-    expect(all.items[1]?.kind).toBe('video');
+    expect(all.items[1].kind).toBe('video');
     const page = await listSaved(dir, { limit: 1, offset: 1 });
     expect(page.items.map((item) => item.name)).toEqual(['mid.mp4']);
   });

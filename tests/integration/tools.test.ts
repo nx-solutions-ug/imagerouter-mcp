@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -8,6 +8,7 @@ import { resolveConfig } from '../../src/lib/config.js';
 import { ImageRouterClient } from '../../src/lib/imagerouter-client.js';
 import { createServer } from '../../src/server.js';
 import { fakeFetch, json } from '../helpers/fake-fetch.js';
+import { makePng } from '../helpers/images.js';
 
 type Handler = Parameters<typeof fakeFetch>[0];
 
@@ -62,6 +63,21 @@ describe('tool surface', () => {
   });
 });
 
+describe('tool descriptions', () => {
+  it('say that a metadata file is written next to every result', async () => {
+    const { client } = await connect(() => json({}));
+    const { tools } = await client.listTools();
+    for (const name of ['generate_image', 'edit_image', 'generate_video']) {
+      const description = tools.find((tool) => tool.name === name)?.description ?? '';
+      expect({ name, mentionsMetadata: /metadata/i.test(description) }).toEqual({
+        name,
+        mentionsMetadata: true,
+      });
+      expect(description).toContain('.json');
+    }
+  });
+});
+
 describe('generate_image', () => {
   it('saves the image and returns path, url, cost and latency', async () => {
     const { client, calls, outputDir } = await connect(generated('http://cdn.test/a.png'));
@@ -80,6 +96,32 @@ describe('generate_image', () => {
     expect(data.path.startsWith(outputDir)).toBe(true);
     expect(calls[0].url).toBe('http://api.test/v1/openai/images/generations');
     expect(JSON.parse(calls[0].init.body as string).quality).toBe('high');
+  });
+
+  it('returns width, height and the metadata file next to the image', async () => {
+    const { client, outputDir } = await connect((url) =>
+      url.startsWith('http://api.test')
+        ? json({ data: [{ url: 'http://cdn.test/a.png' }], cost: 0.01, latency: 100 })
+        : new Response(makePng(48, 32), { headers: { 'content-type': 'image/png' } }),
+    );
+    const result = await client.callTool({
+      name: 'generate_image',
+      arguments: { prompt: 'a fox', model: 'm/x', size: '1024x1024' },
+    });
+    expect(result.isError).toBeFalsy();
+    const data = JSON.parse(text(result));
+    expect(data).toMatchObject({ width: 48, height: 32, metadata_path: `${data.path}.json` });
+    expect(data.metadata_path.startsWith(outputDir)).toBe(true);
+    expect(JSON.parse(await readFile(data.metadata_path, 'utf8'))).toMatchObject({
+      version: 1,
+      model: 'm/x',
+      prompt: 'a fox',
+      requested: { size: '1024x1024' },
+      width: 48,
+      height: 32,
+      cost: 0.01,
+      url: 'http://cdn.test/a.png',
+    });
   });
 
   it('returns isError with the API message on 402', async () => {

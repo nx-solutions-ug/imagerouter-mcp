@@ -10,7 +10,7 @@ export function registerGenerateVideo(server: McpServer, deps: Deps): void {
     'generate_video',
     {
       description:
-        'Generate a video from a text prompt, from images (image-to-video), or both, through ImageRouter. Can take several minutes. Saves the video to disk and returns its path, hosted URL, cost and latency.',
+        'Generate a video from a text prompt, from images (image-to-video), or both, through ImageRouter. Can take several minutes. Saves the video to disk and returns its path, hosted URL, cost and latency. Also writes a metadata file (<video>.json: prompt, model, cost) next to the result and returns its path as metadata_path.',
       inputSchema: z.object({
         prompt: prompt.optional().describe('What to generate.'),
         images: mediaInputs.optional().describe('Start image(s) for image-to-video.'),

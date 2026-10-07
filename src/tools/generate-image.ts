@@ -10,7 +10,7 @@ export function registerGenerateImage(server: McpServer, deps: Deps): void {
     'generate_image',
     {
       description:
-        'Generate an image from a text prompt through ImageRouter. Saves the image to disk and returns its path, the hosted URL (valid 30 days, publicly reachable), cost in USD and latency. Spends credits unless the model is free.',
+        'Generate an image from a text prompt through ImageRouter. Saves the image to disk and returns its path, the hosted URL (valid 30 days, publicly reachable), cost in USD, latency and the actual width and height. Also writes a metadata file (<image>.json: prompt, model, size, cost) next to the image and returns its path as metadata_path. Spends credits unless the model is free.',
       inputSchema: z.object({
         prompt: prompt.describe('What to generate.'),
         model,

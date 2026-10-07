@@ -103,8 +103,19 @@
         </div>
         <div class="card bg-base-100 shadow-sm">
           <div class="card-body">
-            <h2 class="card-title">Gallery <span class="badge" id="gallery-count">0</span></h2>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <h2 class="card-title">Gallery <span class="badge" id="gallery-count">0</span></h2>
+              <p class="text-sm opacity-70 hidden" id="gallery-spent"></p>
+            </div>
             <p class="text-sm opacity-70 break-all" id="gallery-dir"></p>
+            <input
+              class="input w-full"
+              id="gallery-search"
+              type="search"
+              placeholder="Search prompt, model or file name"
+              aria-label="Search images by prompt, model or file name"
+              autocomplete="off"
+            />
             <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4" id="gallery"></div>
             <p class="opacity-70 hidden" id="gallery-empty">Nothing generated yet.</p>
           </div>
@@ -112,10 +123,32 @@
       </section>
     </main>
 
-    <dialog class="modal" id="lightbox">
-      <div class="modal-box max-w-5xl p-2">
-        <img class="w-full rounded-box" id="lightbox-image" alt="" />
-        <p class="p-2 text-sm break-all" id="lightbox-name"></p>
+    <dialog class="modal" id="detail" aria-label="Image details">
+      <div class="modal-box w-11/12 max-w-5xl p-4 sm:p-6">
+        <form method="dialog">
+          <button
+            class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+            aria-label="Close details"
+          >
+            ✕
+          </button>
+        </form>
+        <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_20rem]">
+          <img
+            class="rounded-box w-full max-h-[70vh] object-contain bg-base-200"
+            id="detail-image"
+            alt=""
+          />
+          <div class="flex min-w-0 flex-col gap-3">
+            <p class="font-semibold break-all pr-8" id="detail-name"></p>
+            <p class="opacity-70 hidden" id="detail-empty">No details recorded for this image.</p>
+            <dl
+              class="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm"
+              id="detail-list"
+            ></dl>
+            <div class="flex flex-wrap gap-2" id="detail-actions"></div>
+          </div>
+        </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button>close</button></form>
     </dialog>

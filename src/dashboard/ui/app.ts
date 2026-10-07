@@ -26,9 +26,19 @@ const usd = (value: number): string => `$${value.toFixed(value < 1 ? 4 : 2)}`;
 const MODEL_KEY = 'imagerouter:model';
 
 let models: Model[] = [];
+// The model the user picked. Only the select's change event and a successful generation move it;
+// filtering never does, so clearing the filter brings the choice back.
+let chosenModel: string | null = null;
+
+class NetworkError extends Error {}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  let response: Response;
+  try {
+    response = await fetch(path, init);
+  } catch (error) {
+    throw new NetworkError((error as Error).message);
+  }
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
@@ -60,7 +70,6 @@ function renderModels(): void {
   const search = el<HTMLInputElement>('model-search').value.trim().toLowerCase();
   const freeOnly = el<HTMLInputElement>('free-only').checked;
   const select = el<HTMLSelectElement>('model');
-  const previous = select.value || remember(MODEL_KEY);
   const visible = models.filter(
     (model) =>
       (!search || model.id.toLowerCase().includes(search)) && (!freeOnly || model.min_price === 0),
@@ -76,12 +85,20 @@ function renderModels(): void {
       return new Option(price ? `${model.id} · ${price}` : model.id, model.id);
     }),
   );
-  if (previous && visible.some((model) => model.id === previous)) {
-    select.value = previous;
+  if (chosenModel && visible.some((model) => model.id === chosenModel)) {
+    select.value = chosenModel;
   } else {
-    // Never preselect a paid model by accident: prefer the first free one.
+    // The chosen model is hidden by the filter. Never fall back to a paid model: take the first
+    // free one, or leave the required select empty so the form cannot be submitted.
     const free = visible.find((model) => model.min_price === 0);
-    if (free) select.value = free.id;
+    if (free) {
+      select.value = free.id;
+    } else {
+      const placeholder = new Option('Choose a model', '', true, true);
+      placeholder.disabled = true;
+      select.prepend(placeholder);
+      select.value = '';
+    }
   }
   renderModelOptions();
 }
@@ -99,7 +116,9 @@ function renderModelOptions(): void {
       : model.min_price === null
         ? 'Price unknown'
         : `From ${usd(model.min_price)} per image`
-    : 'No model matches the filter';
+    : el<HTMLSelectElement>('model').options.length > 1
+      ? 'Choose a model'
+      : 'No model matches the filter';
 }
 
 function showResult(result: Generated): void {
@@ -201,11 +220,19 @@ async function generate(event: SubmitEvent): Promise<void> {
         output_format: el<HTMLSelectElement>('format').value,
       }),
     });
+    chosenModel = model;
     remember(MODEL_KEY, model);
     showResult(result);
     await Promise.all([loadGallery(), loadBalance()]);
   } catch (caught) {
-    error.textContent = (caught as Error).message;
+    if (caught instanceof NetworkError) {
+      // The request may have reached ImageRouter and been billed even though no answer came back.
+      error.textContent =
+        'The connection to the dashboard was lost before an answer arrived. The request may still have completed and been billed; the gallery and balance are refreshed below, check them before trying again.';
+      await Promise.all([loadGallery(), loadBalance()]);
+    } else {
+      error.textContent = (caught as Error).message;
+    }
     error.classList.remove('hidden');
   } finally {
     submit.disabled = false;
@@ -215,9 +242,19 @@ async function generate(event: SubmitEvent): Promise<void> {
 
 async function init(): Promise<void> {
   el('generate-form').addEventListener('submit', (event) => void generate(event as SubmitEvent));
+  // Enter in a filter control must never submit the form: submitting spends credits.
+  for (const id of ['model-search', 'free-only']) {
+    el(id).addEventListener('keydown', (event) => {
+      if ((event as KeyboardEvent).key === 'Enter') event.preventDefault();
+    });
+  }
   el('model-search').addEventListener('input', renderModels);
   el('free-only').addEventListener('change', renderModels);
-  el('model').addEventListener('change', renderModelOptions);
+  el('model').addEventListener('change', () => {
+    const value = el<HTMLSelectElement>('model').value;
+    if (value) chosenModel = value;
+    renderModelOptions();
+  });
   el('refresh-balance').addEventListener('click', () => void loadBalance());
 
   let status: { hasApiKey: boolean; outputDir: string; defaultImageModel: string | null } | null =
@@ -239,6 +276,7 @@ async function init(): Promise<void> {
     }
     if (status.hasApiKey) void loadBalance();
   }
+  chosenModel = remember(MODEL_KEY);
 
   void loadGallery();
   try {

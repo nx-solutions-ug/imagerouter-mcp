@@ -142,6 +142,20 @@ describe('edit_image', () => {
   });
 });
 
+describe('prompt validation', () => {
+  it.each(['', '   '])('rejects the blank prompt %j without calling the API', async (blank) => {
+    const { client, calls } = await connect(() => json({}));
+    for (const name of ['generate_image', 'edit_image', 'generate_video']) {
+      const result = await client.callTool({
+        name,
+        arguments: { prompt: blank, model: 'm', images: ['http://x/a.png'] },
+      });
+      expect([name, result.isError]).toEqual([name, true]);
+    }
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe('generate_video', () => {
   it('posts seconds and saves an mp4', async () => {
     const { client, calls } = await connect((url) =>
@@ -172,7 +186,9 @@ describe('generate_video', () => {
       name: 'generate_video',
       arguments: { prompt: 'x', model: 'v/m' },
     });
-    expect(text(result)).toBe('SERVER_ERROR: provider down');
+    expect(text(result)).toBe(
+      'SERVER_ERROR: provider down. The request may still complete and be billed. Check get_credits before retrying.',
+    );
   });
 });
 

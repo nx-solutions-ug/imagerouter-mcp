@@ -113,7 +113,14 @@ export class ImageRouterClient {
     } catch (error) {
       throw transportError(error);
     }
-    if (!response.ok) throw await errorFromResponse(response);
+    if (!response.ok) {
+      const error = await errorFromResponse(response);
+      // A 5xx on a generation call does not prove that nothing was billed.
+      if (billed && response.status >= 500) {
+        error.message = `${error.message.replace(/[.!?]?$/, '.')}${suffix}`;
+      }
+      throw error;
+    }
 
     const read = async <T>(parse: (r: Response) => Promise<T>): Promise<T> => {
       try {

@@ -136,6 +136,26 @@ describe('ImageRouterClient', () => {
       expect((read as Error).message).not.toContain('billed');
     });
 
+    it('adds the billing note to generation 5xx errors only', async () => {
+      const down = (status: number) =>
+        fakeFetch(() => json({ error: { message: 'down' } }, status));
+      for (const status of [500, 503]) {
+        const error = await new ImageRouterClient(config, down(status).fetch)
+          .generate('image', { json: {} })
+          .catch((e: Error) => e);
+        expect(error).toMatchObject({ code: 'SERVER_ERROR', statusCode: status });
+        expect((error as Error).message).toBe(`down. ${note}`);
+      }
+      const rejected = await new ImageRouterClient(config, down(402).fetch)
+        .generate('image', { json: {} })
+        .catch((e: Error) => e);
+      expect((rejected as Error).message).toBe('down');
+      const read = await new ImageRouterClient(config, down(503).fetch)
+        .getCredits()
+        .catch((e: Error) => e);
+      expect((read as Error).message).toBe('down');
+    });
+
     it('maps a non-JSON 200 to API_ERROR, with the note only for generate', async () => {
       const html = () => fakeFetch(() => new Response('<html>', { status: 200 }));
       const gen = await new ImageRouterClient(config, html().fetch)

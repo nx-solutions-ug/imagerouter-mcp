@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { formatToolError } from '../lib/errors.js';
 import { type Deps, runGeneration } from '../lib/generation.js';
 import { mediaInputs, model, ok, outputFormat, prompt, quality, saving, size } from './schemas.js';
+import { withProgress } from './progress.js';
 
 export function registerEditImage(server: McpServer, deps: Deps): void {
   server.registerTool(
@@ -26,9 +27,9 @@ export function registerEditImage(server: McpServer, deps: Deps): void {
       }),
       annotations: { readOnlyHint: false, openWorldHint: true },
     },
-    async (args) => {
+    async (args, extra) => {
       try {
-        return ok(await runGeneration(deps, 'edit', args));
+        return ok(await withProgress(extra, () => runGeneration(deps, 'edit', args)));
       } catch (error) {
         return formatToolError(error);
       }

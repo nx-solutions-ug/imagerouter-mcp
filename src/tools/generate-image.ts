@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { formatToolError } from '../lib/errors.js';
 import { type Deps, runGeneration } from '../lib/generation.js';
 import { model, ok, outputFormat, prompt, quality, saving, size } from './schemas.js';
+import { withProgress } from './progress.js';
 
 export function registerGenerateImage(server: McpServer, deps: Deps): void {
   server.registerTool(
@@ -20,9 +21,9 @@ export function registerGenerateImage(server: McpServer, deps: Deps): void {
       }),
       annotations: { readOnlyHint: false, openWorldHint: true },
     },
-    async (args) => {
+    async (args, extra) => {
       try {
-        return ok(await runGeneration(deps, 'image', args));
+        return ok(await withProgress(extra, () => runGeneration(deps, 'image', args)));
       } catch (error) {
         return formatToolError(error);
       }

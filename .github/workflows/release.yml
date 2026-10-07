@@ -42,7 +42,9 @@ jobs:
       - name: Build
         run: bun run build
 
-  # Run semantic-release if tests pass
+  # Run semantic-release if tests pass.
+  # This job deliberately has no build step: the build runs inside `npm publish` via
+  # `prepublishOnly`, after semantic-release has bumped the version, so dist/ always matches it.
   release:
     name: Release
     needs: test
@@ -68,7 +70,8 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       # Node.js is still required in this job: @semantic-release/npm publishes
-      # to the npm registry through the npm CLI (including provenance).
+      # to the npm registry through the npm CLI. (The id-token permission is granted, but
+      # provenance itself is not enabled here.)
       # Dependency installation itself is handled by Bun.
       - name: Setup Node.js
         uses: actions/setup-node@v7

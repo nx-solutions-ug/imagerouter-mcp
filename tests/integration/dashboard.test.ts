@@ -303,6 +303,62 @@ describe('dashboard handler', () => {
     expect(local.status).toBe(200);
   });
 
+  it('rejects a null origin and a foreign host on generate without calling the API', async () => {
+    const { handle, calls } = await setup(() => json({}));
+    const post = (headers: Record<string, string>) =>
+      handle(
+        new Request(`${ORIGIN}/api/generate`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...headers },
+          body: '{"prompt":"x","model":"m"}',
+        }),
+      );
+    expect((await post({ host: `127.0.0.1:${PORT}`, origin: 'null' })).status).toBe(403);
+    expect((await post({ host: 'evil.example', origin: ORIGIN })).status).toBe(403);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('accepts the bare host and origin when served on port 80', async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), 'ir-dash-80-'));
+    const uiDir = await mkdtemp(join(tmpdir(), 'ir-dash-80ui-'));
+    await writeFile(join(uiDir, 'index.html'), 'ui');
+    const config = resolveConfig(
+      {
+        IMAGEROUTER_API_KEY: 'k',
+        IMAGEROUTER_BASE_URL: 'http://api.test',
+        IMAGEROUTER_OUTPUT_DIR: outputDir,
+      },
+      '/h',
+    );
+    const fake = fakeFetch(() => json({ data: [{ b64_json: 'AQID' }] }));
+    const handle = createDashboardHandler({
+      deps: {
+        config,
+        client: new ImageRouterClient(config, fake.fetch),
+      },
+      uiDir,
+      port: 80,
+    });
+    const get = (host: string) =>
+      handle(new Request('http://127.0.0.1/api/status', { headers: { host } }));
+    for (const host of ['127.0.0.1', 'localhost', '127.0.0.1:80', 'localhost:80']) {
+      expect([host, (await get(host)).status]).toEqual([host, 200]);
+    }
+    expect((await get('evil.example')).status).toBe(403);
+    expect((await get('127.0.0.1:81')).status).toBe(403);
+    const post = (origin: string) =>
+      handle(
+        new Request('http://127.0.0.1/api/generate', {
+          method: 'POST',
+          headers: { host: 'localhost', origin, 'content-type': 'application/json' },
+          body: '{"prompt":"x","model":"m","ephemeral":true}',
+        }),
+      );
+    expect((await post('http://localhost')).status).toBe(200);
+    expect((await post('http://127.0.0.1')).status).toBe(200);
+    expect((await post('http://evil.example')).status).toBe(403);
+  });
+
   it('answers unknown API routes and methods', async () => {
     const { call } = await setup(() => json({}));
     expect((await call('/api/nope')).status).toBe(404);

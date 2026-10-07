@@ -18,7 +18,7 @@ const ASSET_TYPES: Record<string, string> = {
 // The tool schema minus `output_dir`, `images` and `masks`: the dashboard never takes paths.
 const { output_dir: _outputDir, ...savingFields } = saving;
 const generateBody = z.object({
-  prompt: prompt.trim().min(1),
+  prompt,
   model,
   size,
   quality,
@@ -65,6 +65,11 @@ export function createDashboardHandler(options: {
 }): (request: Request) => Promise<Response> {
   const { deps, uiDir, port } = options;
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+  // Browsers leave the default port out of Host and Origin.
+  if (port === 80) {
+    hosts.add('127.0.0.1');
+    hosts.add('localhost');
+  }
   const origins = new Set([...hosts].map((host) => `http://${host}`));
 
   async function asset(pathname: string): Promise<Response> {

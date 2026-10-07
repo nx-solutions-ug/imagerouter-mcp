@@ -33,6 +33,9 @@ Claude Desktop or any client that takes a JSON config:
 }
 ```
 
+Desktop apps may not have Bun on their `PATH`; if the server does not start, use
+the absolute path to `bunx` (often `/home/you/.bun/bin/bunx`) as `command`.
+
 Without a key the server still starts and `list_models` works; the other tools
 return an `UNAUTHORIZED` error that names `IMAGEROUTER_API_KEY`.
 
@@ -185,8 +188,12 @@ generate images (searchable model picker with prices and free models marked,
 size, quality, format), the result with its cost, latency, path and URL, and a
 gallery of the saved images in the output directory (videos and files of
 unrecognised type, saved as `.bin`, are not shown). When there is no remembered
-or configured model, or that model is not in the current filtered list, it
-preselects a free model so a first click never spends credits by accident.
+or configured model, or that model is hidden by the current filter, it
+selects the first visible free model so a first click never spends credits by
+accident; when the filter leaves no free model, the picker shows a disabled
+"Choose a model" entry and Generate stays blocked until you pick one. Your
+choice is only changed by you and by a successful generation, so clearing the
+filter brings it back.
 Editing and video are available through the MCP tools only.
 
 It listens on `127.0.0.1` only and answers only requests addressed to

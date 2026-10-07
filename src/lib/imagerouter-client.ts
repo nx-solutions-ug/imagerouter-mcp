@@ -10,6 +10,8 @@ const GENERATION_PATHS: Record<GenerationKind, string> = {
 };
 
 const READ_TIMEOUT_MS = 30_000;
+const BILLING_NOTE =
+  'The request may still complete and be billed. Check get_credits before retrying.';
 
 export class ImageRouterClient {
   private readonly config: Config;
@@ -30,26 +32,27 @@ export class ImageRouterClient {
     } else {
       payload = body.form;
     }
-    const response = await this.request(
+    const { read } = await this.request(
       `${this.config.baseUrl}${GENERATION_PATHS[kind]}`,
       { method: 'POST', headers, body: payload },
       timeout,
+      true,
     );
-    return (await response.json()) as GenerationResponse;
+    return read((r) => r.json() as Promise<GenerationResponse>);
   }
 
   async listModels(): Promise<RawCatalogue> {
-    const response = await this.request(`${this.config.baseUrl}/v1/models`, {}, READ_TIMEOUT_MS);
-    return (await response.json()) as RawCatalogue;
+    const { read } = await this.request(`${this.config.baseUrl}/v1/models`, {}, READ_TIMEOUT_MS);
+    return read((r) => r.json() as Promise<RawCatalogue>);
   }
 
   async getCredits(): Promise<Credits> {
-    const response = await this.request(
+    const { read } = await this.request(
       `${this.config.baseUrl}/v1/credits`,
       { headers: this.authHeaders() },
       READ_TIMEOUT_MS,
     );
-    const raw = (await response.json()) as Record<string, unknown>;
+    const raw = await read((r) => r.json() as Promise<Record<string, unknown>>);
     return {
       remaining_credits: Number(raw.remaining_credits ?? 0),
       credit_usage: Number(raw.credit_usage ?? 0),
@@ -59,11 +62,9 @@ export class ImageRouterClient {
 
   async download(url: string): Promise<{ bytes: Uint8Array; contentType: string | null }> {
     try {
-      const response = await this.request(url, {}, this.config.videoTimeoutMs);
-      return {
-        bytes: new Uint8Array(await response.arrayBuffer()),
-        contentType: response.headers.get('content-type'),
-      };
+      const { response, read } = await this.request(url, {}, this.config.videoTimeoutMs);
+      const bytes = await read(async (r) => new Uint8Array(await r.arrayBuffer()));
+      return { bytes, contentType: response.headers.get('content-type') };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       throw new ImageRouterError(
@@ -84,25 +85,50 @@ export class ImageRouterClient {
     return new Headers({ authorization: `Bearer ${this.config.apiKey}` });
   }
 
-  private async request(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  private async request(
+    url: string,
+    init: RequestInit,
+    timeoutMs: number,
+    billed = false,
+  ): Promise<{ response: Response; read: <T>(parse: (r: Response) => Promise<T>) => Promise<T> }> {
     const signal = AbortSignal.timeout(timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchImpl(url, { ...init, signal });
-    } catch (error) {
+    const suffix = billed ? ` ${BILLING_NOTE}` : '';
+    const transportError = (error: unknown): ImageRouterError => {
       if (signal.aborted) {
-        throw new ImageRouterError(
-          `Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
+        return new ImageRouterError(
+          `Request timed out after ${Math.round(timeoutMs / 1000)} seconds.${suffix}`,
           'TIMEOUT',
         );
       }
       const reason = error instanceof Error ? error.message : String(error);
-      throw new ImageRouterError(
-        `Cannot reach ${new URL(url).host}: ${reason}`,
+      return new ImageRouterError(
+        `Cannot reach ${new URL(url).host}: ${reason}${suffix}`,
         'CONNECTION_ERROR',
       );
+    };
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, { ...init, signal });
+    } catch (error) {
+      throw transportError(error);
     }
     if (!response.ok) throw await errorFromResponse(response);
-    return response;
+
+    const read = async <T>(parse: (r: Response) => Promise<T>): Promise<T> => {
+      try {
+        return await parse(response);
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new ImageRouterError(
+            `ImageRouter returned a response that is not valid JSON.${suffix}`,
+            'API_ERROR',
+            response.status,
+          );
+        }
+        throw transportError(error);
+      }
+    };
+    return { response, read };
   }
 }

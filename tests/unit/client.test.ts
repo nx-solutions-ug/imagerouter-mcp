@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveConfig } from '../../src/lib/config.js';
+import { ImageRouterError } from '../../src/lib/errors.js';
 import { ImageRouterClient } from '../../src/lib/imagerouter-client.js';
 import { fakeFetch, json } from '../helpers/fake-fetch.js';
 
@@ -99,5 +100,75 @@ describe('ImageRouterClient', () => {
     await expect(new ImageRouterClient(config, gone.fetch).download('http://x/a')).rejects.toThrow(
       'http://x/a',
     );
+  });
+
+  describe('billing note and body failures', () => {
+    const note = 'The request may still complete and be billed. Check get_credits before retrying.';
+    const failing = () =>
+      fakeFetch(() => {
+        throw new TypeError('fetch failed');
+      });
+
+    it('adds the billing note to generate timeouts and network failures only', async () => {
+      const slow = fakeFetch(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+          }),
+      );
+      const fast = { ...config, imageTimeoutMs: 20 };
+      const timeout = await new ImageRouterClient(fast, slow.fetch)
+        .generate('image', { json: {} })
+        .catch((e: Error) => e);
+      expect(timeout).toMatchObject({ code: 'TIMEOUT' });
+      expect((timeout as Error).message.endsWith(note)).toBe(true);
+
+      const net = await new ImageRouterClient(config, failing().fetch)
+        .generate('image', { json: {} })
+        .catch((e: Error) => e);
+      expect(net).toMatchObject({ code: 'CONNECTION_ERROR' });
+      expect((net as Error).message.endsWith(note)).toBe(true);
+
+      const read = await new ImageRouterClient(config, failing().fetch)
+        .getCredits()
+        .catch((e: Error) => e);
+      expect(read).toMatchObject({ code: 'CONNECTION_ERROR' });
+      expect((read as Error).message).not.toContain('billed');
+    });
+
+    it('maps a non-JSON 200 to API_ERROR, with the note only for generate', async () => {
+      const html = () => fakeFetch(() => new Response('<html>', { status: 200 }));
+      const gen = await new ImageRouterClient(config, html().fetch)
+        .generate('image', { json: {} })
+        .catch((e: Error) => e);
+      expect(gen).toMatchObject({ code: 'API_ERROR' });
+      expect((gen as Error).message).toBe(
+        `ImageRouter returned a response that is not valid JSON. ${note}`,
+      );
+
+      const credits = await new ImageRouterClient(config, html().fetch)
+        .getCredits()
+        .catch((e: Error) => e);
+      expect(credits).toMatchObject({ code: 'API_ERROR' });
+      expect((credits as Error).message).toBe(
+        'ImageRouter returned a response that is not valid JSON.',
+      );
+    });
+
+    it('maps a body stream that errors mid-read to an ImageRouterError', async () => {
+      const broken = fakeFetch(() => {
+        const body = new ReadableStream({
+          start(controller) {
+            controller.error(new TypeError('terminated'));
+          },
+        });
+        return new Response(body, { status: 200 });
+      });
+      const error = await new ImageRouterClient(config, broken.fetch)
+        .generate('image', { json: {} })
+        .catch((e: Error) => e);
+      expect(error).toBeInstanceOf(ImageRouterError);
+      expect(error).toMatchObject({ code: 'CONNECTION_ERROR' });
+    });
   });
 });

@@ -9,6 +9,7 @@ interface Model {
 // edited, so `toRecord` re-checks every field before it reaches the DOM.
 interface GenerationRecord {
   file: string;
+  kind?: string;
   model: string;
   created?: string;
   prompt?: string;
@@ -69,6 +70,7 @@ function toRecord(value: unknown): GenerationRecord | null {
   ) as Record<string, unknown>;
   return {
     file: text(raw.file) ?? '',
+    kind: text(raw.kind),
     model: text(raw.model) ?? '',
     created: text(raw.created),
     prompt: text(raw.prompt),
@@ -272,6 +274,7 @@ function openDetail(detail: Detail): void {
   const rows: Array<[string, string | undefined, boolean?]> = record
     ? [
         ['Prompt', record.prompt, true],
+        ['Kind', record.kind],
         ['Model', record.model],
         [
           'Size',
@@ -308,7 +311,8 @@ function openDetail(detail: Detail): void {
   actions.push(copyButton('Copy path', detail.path, 'btn btn-sm'));
   // A URL from a record is only ever copied, never followed.
   if (record?.url) actions.push(copyButton('Copy URL', record.url, 'btn btn-sm'));
-  if (record) {
+  // The form cannot reproduce the inputs of an edit or a video, so only images offer this.
+  if (record && (record.kind === undefined || record.kind === 'image')) {
     actions.push(
       actionButton('Use these settings', () => useSettings(record), 'btn btn-sm btn-primary'),
     );
@@ -317,26 +321,40 @@ function openDetail(detail: Detail): void {
   el<HTMLDialogElement>('detail').showModal();
 }
 
-function pick(select: HTMLSelectElement, value: string | undefined): void {
-  if (value && [...select.options].some((option) => option.value === value)) select.value = value;
+// Selects `value` when the select offers it, else the neutral `fallback`, else the first option.
+function pick(select: HTMLSelectElement, value: string | undefined, fallback: string): void {
+  const offered = (candidate: string | undefined): candidate is string =>
+    candidate !== undefined && [...select.options].some((option) => option.value === candidate);
+  if (offered(value)) select.value = value;
+  else if (offered(fallback)) select.value = fallback;
+  else select.selectedIndex = 0;
 }
 
-// Loads a record into the form. It never submits: generating spends credits.
+// Loads a record into the form. It never submits: generating spends credits. Every field is set,
+// to the recorded value or a neutral default, so nothing stale from an earlier choice survives.
 function useSettings(record: GenerationRecord): void {
-  if (record.prompt) el<HTMLTextAreaElement>('prompt').value = record.prompt;
-  const available = models.some((candidate) => candidate.id === record.model);
-  if (available) {
-    // Clear the filters so the recorded model is certain to be in the list.
-    el<HTMLInputElement>('model-search').value = '';
-    el<HTMLInputElement>('free-only').checked = false;
-    chosenModel = record.model;
-    remember(MODEL_KEY, record.model);
+  el<HTMLTextAreaElement>('prompt').value = record.prompt ?? '';
+  const recorded = models.find((candidate) => candidate.id === record.model);
+  if (recorded) {
+    // Only when the filters hide the recorded model are they cleared; otherwise they stay as set.
+    const search = el<HTMLInputElement>('model-search').value.trim().toLowerCase();
+    const freeOnly = el<HTMLInputElement>('free-only').checked;
+    if (
+      (search && !recorded.id.toLowerCase().includes(search)) ||
+      (freeOnly && recorded.min_price !== 0)
+    ) {
+      el<HTMLInputElement>('model-search').value = '';
+      el<HTMLInputElement>('free-only').checked = false;
+    }
+    // Remembered in memory for this page only; the choice is persisted by the select's change
+    // event and after a successful generation, never here.
+    chosenModel = recorded.id;
   }
   renderModels();
-  pick(el<HTMLSelectElement>('size'), record.requested.size);
-  pick(el<HTMLSelectElement>('quality'), record.requested.quality);
-  pick(el<HTMLSelectElement>('format'), record.requested.output_format);
-  if (!available) {
+  pick(el<HTMLSelectElement>('size'), record.requested.size, 'auto');
+  pick(el<HTMLSelectElement>('quality'), record.requested.quality, 'auto');
+  pick(el<HTMLSelectElement>('format'), record.requested.output_format, 'webp');
+  if (!recorded) {
     el('model-info').textContent = record.model
       ? `The recorded model ${record.model} is not available. Choose another model.`
       : 'The recorded model is not available. Choose another model.';
@@ -411,8 +429,11 @@ async function loadGallery(): Promise<void> {
   const spent = el('gallery-spent');
   const spentTotal = amount(page.spent);
   const anyCost = images.some((item) => toRecord(item.record)?.cost !== undefined);
+  const matching = amount(page.total) ?? images.length;
   spent.textContent =
-    spentTotal === undefined ? '' : `Spent ${spentLabel(spentTotal)} on these images`;
+    spentTotal === undefined
+      ? ''
+      : `Spent ${spentLabel(spentTotal)} on ${matching} ${matching === 1 ? 'image' : 'images'}`;
   spent.classList.toggle('hidden', !anyCost || spentTotal === undefined);
 
   el('gallery').replaceChildren(...images.map(tile));

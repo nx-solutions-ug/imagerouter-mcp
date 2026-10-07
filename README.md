@@ -214,8 +214,12 @@ hosted URL, and **Use these settings**, which loads the prompt, model, size,
 quality and format into the form (it never submits it; if the recorded model is
 no longer offered, the other fields are still loaded and you are told). The
 search box above the gallery filters by prompt, model or file name, and
-"Spent $X.XX on these images" next to the count sums the recorded costs of the
-matching images, counting a multi-result request once. Images without a metadata
+"Spent $X.XX on N images" next to the count sums the recorded costs of all N
+matching images (not only the tiles shown), counting a multi-result request once;
+videos are never listed or counted. **Use these settings** sets the prompt, size,
+quality and format to the recorded values, or to neutral defaults (empty prompt,
+`auto`, `auto`, `webp`) where the record has none or the model does not offer them, and
+is offered for images only, not for edits or videos. Images without a metadata
 file (for example from before this feature) still show, without details.
 
 It listens on `127.0.0.1` only and answers only requests addressed to
@@ -256,7 +260,8 @@ stored in plain text in the output directory, also for `ephemeral` requests**,
 which only skip ImageRouter's storage; do not put a prompt there that you would not
 leave on disk. The metadata file is best-effort: if it cannot be written the
 generation still succeeds and `metadata_path` is left out. Delete the `.json` to
-forget a record; it is never served by the dashboard and not shown as an image.
+forget a record; the sidecar file itself is not served by the dashboard and not shown as an image
+(its contents are returned by `/api/images`).
 
 ## Development
 

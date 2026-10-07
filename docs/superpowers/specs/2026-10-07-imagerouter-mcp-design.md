@@ -194,8 +194,9 @@ repeated on each sidecar, so a reader counts only `index` 0 or absent.
 `runGeneration` writes the sidecar right after each file is saved. Writing is
 best-effort (`null` on failure, never throws): the request is already billed. The
 result gains `width`, `height`, `metadata_path` and the same per entry of `files`.
-Records are untrusted on read: types are validated and wrong-typed optional fields
-dropped. Prompts are stored in plain text in the output directory, also for
+Sidecars are written atomically (temporary file, then rename). Records are untrusted on
+read: types are validated, wrong-typed optional fields dropped, strings capped (prompt
+20000, others 2048), `model` must be non-empty and `url` must be http(s). Prompts are stored in plain text in the output directory, also for
 `ephemeral` requests. Out of scope: deleting or editing records, a central
 history, records for earlier images.
 
@@ -233,7 +234,7 @@ browser only ever talks to localhost.
 | `GET /api/models` | Compact image-model list (same projection as `list_models`) |
 | `GET /api/credits` | Balance |
 | `POST /api/generate` | Body = `generate_image` input minus `output_dir` (so `filename` and `ephemeral` are accepted); returns the saved file, `width`/`height`, `metadata_path` and the first file's `record` |
-| `GET /api/images` | Saved images in the output dir, newest first, paginated; each with its `record` or `null`; `?q=` filters (case-insensitive) by prompt, model, file name before paging; `total` counts matches; `spent` sums the matches' `cost`, a multi-result request once |
+| `GET /api/images` | Saved images (videos are excluded) in the output dir, newest first, paginated; each with its `record` or `null`; `?q=` filters (case-insensitive) by prompt, model, file name before paging; `total` counts matching images; `spent` sums the cost of all matching images, a multi-result request once |
 | `GET /files/:name` | Serves one saved file |
 
 Route handlers call the same `ImageRouterClient`, `models.ts` and `output.ts`
@@ -255,9 +256,10 @@ Single page, vanilla TypeScript, Tailwind + daisyUI, bundled by Bun at build tim
 - **Gallery:** grid of images already in the output directory; a tile shows model
   and pixel size (prompt as tooltip) when a record exists. A search box filters by
   prompt, model or file name (debounced, Enter never submits the form); the count
-  is accompanied by "Spent $X.XX on these images". Click opens the detail view:
-  full record, Copy prompt/path/URL, and **Use these settings**, which loads
-  prompt, model, size, quality and format into the form without submitting it.
+  is accompanied by "Spent $X.XX on N images" (N = all matches). Click opens the detail view:
+  full record, Copy prompt/path/URL, and **Use these settings** (images only), which
+  loads prompt, model, size, quality and format into the form without submitting it,
+  resetting any field the record lacks to a neutral default.
   Record data reaches the DOM only through `textContent`/`Option`/property setters.
 
 Scope is image generation and balance, as asked. Editing and video stay

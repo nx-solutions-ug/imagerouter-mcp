@@ -3,8 +3,9 @@ import { basename, extname, join } from 'node:path';
 import { z } from 'zod';
 import { ImageRouterError } from '../lib/errors.js';
 import { type Deps, runGeneration } from '../lib/generation.js';
+import { type GenerationRecord, readRecord } from '../lib/metadata.js';
 import { summariseModels } from '../lib/models.js';
-import { MEDIA_TYPES, listSaved, resolveSavedFile } from '../lib/output.js';
+import { MEDIA_TYPES, type SavedEntry, listSaved, resolveSavedFile } from '../lib/output.js';
 import { model, outputFormat, prompt, quality, saving, size } from '../tools/schemas.js';
 
 const ASSET_TYPES: Record<string, string> = {
@@ -57,6 +58,58 @@ function failFrom(error: unknown): Response {
 }
 
 const fileUrl = (name: string): string => `/files/${encodeURIComponent(name)}`;
+
+const MAX_QUERY_LENGTH = 200;
+const READ_BATCH = 32;
+
+// A sidecar is an untrusted file: whatever goes wrong while reading it, the image still lists.
+async function recordOf(path: string): Promise<GenerationRecord | null> {
+  try {
+    return await readRecord(path);
+  } catch {
+    return null;
+  }
+}
+
+function matches(item: SavedEntry, record: GenerationRecord | null, query: string): boolean {
+  if (!query) return true;
+  return [item.name, record?.prompt, record?.model].some((field) =>
+    field?.toLowerCase().includes(query),
+  );
+}
+
+// Every result of a multi-result request carries the whole request's cost, so only the first one
+// (or a record that is not part of such a request) contributes.
+function spentOn(records: Array<GenerationRecord | null>): number {
+  let total = 0;
+  for (const record of records) {
+    if (record?.cost !== undefined && (record.index === undefined || record.index === 0)) {
+      total += record.cost;
+    }
+  }
+  return Math.round(total * 1e6) / 1e6;
+}
+
+async function listImages(dir: string, options: { query: string; limit: number; offset: number }) {
+  const everything = await listSaved(dir, { limit: Number.MAX_SAFE_INTEGER });
+  // Videos share the directory but are not part of the image gallery, its total or its spend.
+  const images = everything.items.filter((item) => item.kind === 'image');
+  const records: Array<GenerationRecord | null> = [];
+  for (let start = 0; start < images.length; start += READ_BATCH) {
+    const batch = images.slice(start, start + READ_BATCH);
+    records.push(...(await Promise.all(batch.map((item) => recordOf(item.path)))));
+  }
+  const found = images
+    .map((item, index) => ({ item, record: records[index] ?? null }))
+    .filter(({ item, record }) => matches(item, record, options.query));
+  return {
+    total: found.length,
+    spent: spentOn(found.map(({ record }) => record)),
+    items: found
+      .slice(options.offset, options.offset + options.limit)
+      .map(({ item, record }) => ({ ...item, fileUrl: fileUrl(item.name), record })),
+  };
+}
 
 export function createDashboardHandler(options: {
   deps: Deps;
@@ -112,7 +165,7 @@ export function createDashboardHandler(options: {
     }
     const result = await runGeneration(deps, 'image', parsed.data);
     const name = basename(result.path);
-    return send({ ...result, name, fileUrl: fileUrl(name) });
+    return send({ ...result, name, fileUrl: fileUrl(name), record: await recordOf(result.path) });
   }
 
   async function route(request: Request): Promise<Response> {
@@ -150,11 +203,11 @@ export function createDashboardHandler(options: {
       if (pathname === '/api/images') {
         const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 60, 1), 200);
         const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0);
-        const page = await listSaved(deps.config.outputDir, { limit, offset });
-        return send({
-          total: page.total,
-          items: page.items.map((item) => ({ ...item, fileUrl: fileUrl(item.name) })),
-        });
+        const query = (url.searchParams.get('q') ?? '')
+          .trim()
+          .slice(0, MAX_QUERY_LENGTH)
+          .toLowerCase();
+        return send(await listImages(deps.config.outputDir, { query, limit, offset }));
       }
       if (pathname.startsWith('/api/')) return fail(404, 'NOT_FOUND', 'Unknown API route');
       if (pathname.startsWith('/files/')) return await savedFile(pathname.slice('/files/'.length));

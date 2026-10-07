@@ -27,6 +27,19 @@ libraries below `src/lib/`.
   must warn that the request may still be billed. Keep both when touching
   `generation.ts` or the client.
 
+- Every saved file gets a sidecar `<file>.json` (`src/lib/metadata.ts`), written
+  by `runGeneration` right after the file is saved. It is **best-effort**:
+  `writeRecord` returns `null` and never throws, because the request is already
+  billed and a sidecar problem must not fail or mask it. Prompts are stored in
+  plain text there, also for `ephemeral` requests (that flag only skips
+  ImageRouter's storage). Data URIs are never written; the literal `data-uri`
+  takes their place. Every request-level field (`cost`) is repeated on each
+  sidecar of a multi-result request, with `index`/`count`, so readers must count
+  a request once (`index` 0 or absent). Sidecars are plain files anyone could
+  have edited: `readRecord` validates every field, and the UI reaches the DOM
+  only through `textContent`/`Option`/property setters, never `innerHTML`, and
+  never uses a record's `url` as `href` or `src`.
+
 ## Tool contract
 
 - Inputs are Zod v4 schemas passed as `inputSchema`; the MCP SDK validates
@@ -69,6 +82,11 @@ them any web page could spend credits through the user's browser. The dashboard
 never takes paths from the browser (`output_dir`, `images`, `masks` are not
 accepted), and `/files/:name` takes a bare file name only. Responses carry
 `x-content-type-options: nosniff`; keep the headers when adding routes.
+
+`GET /api/images` returns each image with its `record` (or `null`), filters by
+`q` (prompt, model, file name) before paging, and reports `spent`. It reads the
+sidecars of all images on every call; keep that tolerant of unreadable ones.
+Sidecars are not media: `.json` is neither listed nor served by `/files/`.
 
 ## Build and runtime
 

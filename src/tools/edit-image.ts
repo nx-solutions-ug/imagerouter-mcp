@@ -10,7 +10,7 @@ export function registerEditImage(server: McpServer, deps: Deps): void {
     'edit_image',
     {
       description:
-        'Edit or transform existing images (image-to-image, inpainting with a mask, background removal) through ImageRouter. Needs a model with edit support: list_models with supports_edit. Saves the result to disk and returns its path, hosted URL, cost and latency.',
+        'Edit or transform existing images (image-to-image, inpainting with a mask, background removal) through ImageRouter. Needs a model with edit support: list_models with supports_edit. Saves the result to disk and returns its path, hosted URL, cost, latency and the actual width and height. Also writes a metadata file (<image>.json: prompt, model, inputs, cost) next to the result and returns its path as metadata_path.',
       inputSchema: z.object({
         images: mediaInputs.min(1),
         prompt: prompt

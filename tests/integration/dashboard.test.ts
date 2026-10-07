@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,7 +6,9 @@ import { createDashboardHandler, statusFor } from '../../src/dashboard/routes.js
 import { ImageRouterError } from '../../src/lib/errors.js';
 import { resolveConfig } from '../../src/lib/config.js';
 import { ImageRouterClient } from '../../src/lib/imagerouter-client.js';
+import { type GenerationRecord, metadataPath, writeRecord } from '../../src/lib/metadata.js';
 import { fakeFetch, json } from '../helpers/fake-fetch.js';
+import { makeMp4, makePng } from '../helpers/images.js';
 
 const PORT = 4477;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
@@ -363,5 +365,174 @@ describe('dashboard handler', () => {
     const { call } = await setup(() => json({}));
     expect((await call('/api/nope')).status).toBe(404);
     expect((await call('/api/generate')).status).toBe(405);
+  });
+});
+
+describe('dashboard generation records', () => {
+  async function seeded() {
+    const env = await setup(() => json({}));
+    let age = 100;
+    const add = async (name: string, record?: Partial<GenerationRecord>, bytes = makePng(8, 6)) => {
+      const path = join(env.outputDir, name);
+      await writeFile(path, bytes);
+      const time = new Date(Date.now() - age++ * 1000);
+      await utimes(path, time, time);
+      if (record) {
+        await writeRecord(path, {
+          version: 1,
+          file: name,
+          kind: 'image',
+          created: '2026-10-07T12:00:00.000Z',
+          model: 'm/default',
+          requested: {},
+          bytes: bytes.length,
+          ephemeral: false,
+          ...record,
+        });
+      }
+    };
+    return { ...env, add };
+  }
+  const get = async (call: (path: string) => Promise<Response>, path: string) =>
+    (await call(path)).json();
+
+  it('returns the record of every image and null for one without', async () => {
+    const { call, add } = await seeded();
+    await add('fox.png', { prompt: 'a red fox', model: 'm/foxy', width: 8, height: 6, cost: 0.03 });
+    await add('old.png');
+    const body = await get(call, '/api/images');
+    expect(body.items.map((item: { name: string }) => item.name)).toEqual(['fox.png', 'old.png']);
+    expect(body.items[0].record).toMatchObject({
+      prompt: 'a red fox',
+      model: 'm/foxy',
+      width: 8,
+      height: 6,
+    });
+    expect(body.items[1].record).toBeNull();
+    expect(body.total).toBe(2);
+    expect(body.spent).toBe(0.03);
+  });
+
+  it('filters by prompt, model and file name, case-insensitively, before paging', async () => {
+    const { call, add } = await seeded();
+    await add('a.png', { prompt: 'A Red Fox', model: 'm/one', cost: 0.01 });
+    await add('b.png', { prompt: 'blue bird', model: 'acme/FOXTROT', cost: 0.02 });
+    await add('foxhole.png', { prompt: 'trench', model: 'm/two', cost: 0.04 });
+    await add('c.png', { prompt: 'cat', model: 'm/three', cost: 0.08 });
+    await add('plain.png');
+
+    const names = async (query: string, extra = '') =>
+      (await get(call, `/api/images?q=${encodeURIComponent(query)}${extra}`)).items.map(
+        (item: { name: string }) => item.name,
+      );
+    expect(await names('red fox')).toEqual(['a.png']);
+    expect(await names('FOXTROT')).toEqual(['b.png']);
+    expect((await names('fox')).toSorted()).toEqual(['a.png', 'b.png', 'foxhole.png']);
+    expect(await names('PLAIN')).toEqual(['plain.png']);
+    expect(await names('zzz')).toEqual([]);
+
+    const paged = await get(call, '/api/images?q=fox&limit=2&offset=1');
+    expect(paged.total).toBe(3);
+    expect(paged.items).toHaveLength(2);
+    expect(paged.spent).toBe(0.07);
+    const none = await get(call, '/api/images?q=zzz');
+    expect(none).toMatchObject({ total: 0, spent: 0, items: [] });
+    expect((await get(call, '/api/images?q=%20%20')).total).toBe(5);
+  });
+
+  it('counts a multi-result request once and rounds the sum', async () => {
+    const { call, add } = await seeded();
+    await add('r-0.png', { cost: 0.1, index: 0, count: 3 });
+    await add('r-1.png', { cost: 0.1, index: 1, count: 3 });
+    await add('r-2.png', { cost: 0.1, index: 2, count: 3 });
+    await add('single.png', { cost: 0.2 });
+    await add('thirds.png', { cost: 0.1 + 0.2 });
+    const body = await get(call, '/api/images');
+    expect(body.total).toBe(5);
+    expect(body.spent).toBe(0.6);
+  });
+
+  it('survives corrupt, hostile and unreadable sidecars', async () => {
+    const { call, add, outputDir } = await seeded();
+    await add('good.png', { prompt: 'fine', cost: 0.5 });
+    await add('broken.png');
+    await writeFile(metadataPath(join(outputDir, 'broken.png')), '{nope');
+    await add('hostile.png');
+    await writeFile(
+      metadataPath(join(outputDir, 'hostile.png')),
+      JSON.stringify({ version: 1, file: 3, model: [], cost: 'lots' }),
+    );
+    await add('dir.png');
+    await mkdir(metadataPath(join(outputDir, 'dir.png'))); // unreadable as a file
+    const response = await call('/api/images');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.total).toBe(4);
+    expect(body.spent).toBe(0.5);
+    const byName = Object.fromEntries(
+      body.items.map((item: { name: string; record: unknown }) => [item.name, item.record]),
+    );
+    expect(byName['broken.png']).toBeNull();
+    expect(byName['hostile.png']).toBeNull();
+    expect(byName['dir.png']).toBeNull();
+    expect(byName['good.png']).toMatchObject({ prompt: 'fine' });
+  });
+
+  it('never lists or serves a sidecar as media', async () => {
+    const { call, add, outputDir } = await seeded();
+    await add('x.jpg', { prompt: 'p' });
+    await writeFile(join(outputDir, 'loose.json'), '{}');
+    const body = await get(call, '/api/images');
+    expect(body.items.map((item: { name: string }) => item.name)).toEqual(['x.jpg']);
+    expect(body.total).toBe(1);
+    const sidecar = await call('/files/x.jpg.json');
+    expect(sidecar.status).toBe(400);
+    expect((await call(`/files/${encodeURIComponent('x.jpg.json')}`)).status).toBe(400);
+    expect((await call('/files/loose.json')).status).toBe(400);
+  });
+
+  it('returns the record of the generated image with the generation result', async () => {
+    const { call } = await setup((url) =>
+      url.startsWith('http://api.test')
+        ? json({ data: [{ url: 'http://cdn.test/a.png' }], cost: 0.02, latency: 900 })
+        : new Response(makePng(16, 9), { headers: { 'content-type': 'image/png' } }),
+    );
+    const response = await call('/api/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: ORIGIN },
+      body: JSON.stringify({ prompt: 'a fox', model: 'm/x', size: '1024x1024' }),
+    });
+    const data = await response.json();
+    expect(data).toMatchObject({ width: 16, height: 9, metadata_path: `${data.path}.json` });
+    expect(data.record).toMatchObject({
+      file: data.name,
+      prompt: 'a fox',
+      model: 'm/x',
+      requested: { size: '1024x1024' },
+      width: 16,
+      height: 9,
+      cost: 0.02,
+      latency_ms: 900,
+      url: 'http://cdn.test/a.png',
+    });
+    const gallery = await (await call('/api/images?q=a%20fox')).json();
+    expect(gallery.total).toBe(1);
+    expect(gallery.spent).toBe(0.02);
+  });
+
+  it('lists and counts images only, never a video with a costly sidecar', async () => {
+    const { call, add, outputDir } = await seeded();
+    await add('fox.png', { prompt: 'a fox', cost: 0.25 });
+    await add('clip.mp4', { kind: 'video', prompt: 'a fox runs', cost: 5 }, makeMp4());
+    await writeFile(join(outputDir, 'notes.json'), '{}');
+    const all = await get(call, '/api/images');
+    expect(all.items.map((item: { name: string }) => item.name)).toEqual(['fox.png']);
+    expect(all.total).toBe(1);
+    expect(all.spent).toBe(0.25);
+    const searched = await get(call, '/api/images?q=fox');
+    expect(searched).toMatchObject({ total: 1, spent: 0.25 });
+    const paged = await get(call, '/api/images?limit=1&offset=1');
+    expect(paged).toMatchObject({ total: 1, spent: 0.25, items: [] });
+    expect((await get(call, '/api/images?q=runs')).total).toBe(0);
   });
 });

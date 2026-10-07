@@ -1,3 +1,22 @@
+# [1.1.0](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.0.1...v1.1.0) (2026-10-07)
+
+
+### Bug Fixes
+
+* count images only, bound record fields and write sidecars atomically ([cda2e00](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/cda2e008628c0c4e42489bf74803cc1b3ad42c30))
+* keep file names within 200 bytes and check the execute bit before a paid call ([6f17f58](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/6f17f5857ccfca422fc0dbf98a5c16cd3d03aa72))
+* reset every form field when using recorded settings and label spend by image count ([ebc5058](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/ebc5058076da50ed36c156822fc7a9103b7b79de))
+
+
+### Features
+
+* add the generation record sidecar module ([3a25fee](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/3a25feec7a50defceed8fb0abdc3ed2b26e34965))
+* read image dimensions from the saved bytes ([fb01b32](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/fb01b32a8c506bf05f886cdb3beaebda2af0b63c))
+* return generation records and search from the dashboard API ([e044b4c](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/e044b4cf27c589a3ac160ac8e29917e2ef3df493))
+* show generation records, search and spend in the dashboard ([f9a6242](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/f9a6242dc14be7b7c8415dff5926106c80051190))
+* tell tool callers about the metadata file ([fb80ea2](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/fb80ea25bc374abc2afeb55bd2eced5ebf285299))
+* write a metadata sidecar for every saved result ([8ffc91b](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/8ffc91befb50b2ad2f44f9bc5764a9f8f37b60ec))
+
 ## [1.0.1](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.0.0...v1.0.1) (2026-10-07)
 
 

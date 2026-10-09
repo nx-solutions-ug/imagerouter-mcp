@@ -257,7 +257,9 @@ function detailRow(label: string, value: string, wrap = false): HTMLElement[] {
   term.className = 'opacity-60';
   term.textContent = label;
   const description = document.createElement('dd');
-  description.className = wrap ? 'min-w-0 whitespace-pre-wrap break-words' : 'min-w-0 break-words';
+  description.className = wrap
+    ? 'min-w-0 max-h-[30vh] overflow-y-auto whitespace-pre-wrap break-words'
+    : 'min-w-0 break-words';
   description.textContent = value;
   return [term, description];
 }

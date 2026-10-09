@@ -1,3 +1,11 @@
+# [1.2.0](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.1.1...v1.2.0) (2026-10-09)
+
+
+### Features
+
+* add image to image and video modes to the dashboard ([9a37713](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/9a37713319b9b39ca6dafa431df030cbf00d06fb))
+* let the dashboard generate edits and videos and list videos ([7a314a9](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/7a314a9804e6e9f98cb7701641cd002dd82b30dd))
+
 ## [1.1.1](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.1.0...v1.1.1) (2026-10-09)
 
 

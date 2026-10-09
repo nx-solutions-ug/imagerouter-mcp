@@ -6,6 +6,7 @@ import {
   buildFilename,
   extensionFor,
   listSaved,
+  mediaKind,
   resolveSavedFile,
   saveBytes,
 } from '../../src/lib/output.js';
@@ -206,5 +207,23 @@ describe('resolveSavedFile', () => {
     expect(resolveSavedFile('/out', '..')).toBeNull();
     expect(resolveSavedFile('/out', 'a.txt')).toBeNull();
     expect(resolveSavedFile('/out', '')).toBeNull();
+  });
+});
+
+describe('mediaKind', () => {
+  it('tells images from videos by extension and knows nothing else', () => {
+    const cases: Array<[string, 'image' | 'video' | null]> = [
+      ['a.png', 'image'],
+      ['a.JPEG', 'image'],
+      ['a.webp', 'image'],
+      ['a.gif', 'image'],
+      ['a.mp4', 'video'],
+      ['a.WebM', 'video'],
+      ['a.mov', 'video'],
+      ['a.png.json', null],
+      ['a.bin', null],
+      ['png', null],
+    ];
+    for (const [name, kind] of cases) expect([name, mediaKind(name)]).toEqual([name, kind]);
   });
 });

@@ -8,7 +8,7 @@ import { resolveConfig } from '../../src/lib/config.js';
 import { ImageRouterClient } from '../../src/lib/imagerouter-client.js';
 import { type GenerationRecord, metadataPath, writeRecord } from '../../src/lib/metadata.js';
 import { fakeFetch, json } from '../helpers/fake-fetch.js';
-import { makeMp4, makePng } from '../helpers/images.js';
+import { makeMp4, makePng, toBase64 } from '../helpers/images.js';
 
 const PORT = 4477;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
@@ -42,6 +42,15 @@ async function setup(
 }
 
 const png = () => new Response(new Uint8Array([5]), { headers: { 'content-type': 'image/png' } });
+const mp4 = () => new Response(makeMp4(), { headers: { 'content-type': 'video/mp4' } });
+const DATA_URI = `data:image/png;base64,${toBase64(makePng(4, 4))}`;
+const EDITS = 'http://api.test/v1/openai/images/edits';
+const VIDEOS = 'http://api.test/v1/openai/videos/generations';
+const postJson = (body: unknown): RequestInit => ({
+  method: 'POST',
+  headers: { 'content-type': 'application/json', origin: ORIGIN },
+  body: JSON.stringify(body),
+});
 
 describe('dashboard handler', () => {
   it('serves the UI and its assets', async () => {
@@ -60,13 +69,25 @@ describe('dashboard handler', () => {
     const { call, outputDir } = await setup(() => json({}), {
       IMAGEROUTER_API_KEY: 'secret-key',
       IMAGEROUTER_DEFAULT_IMAGE_MODEL: 'a/b',
+      IMAGEROUTER_DEFAULT_VIDEO_MODEL: 'v/c',
     });
     const body = await (await call('/api/status')).text();
-    expect(JSON.parse(body)).toEqual({ hasApiKey: true, outputDir, defaultImageModel: 'a/b' });
+    expect(JSON.parse(body)).toEqual({
+      hasApiKey: true,
+      outputDir,
+      defaultImageModel: 'a/b',
+      defaultVideoModel: 'v/c',
+    });
     expect(body).not.toContain('secret-key');
+
+    const bare = await setup(() => json({}));
+    expect(await (await bare.call('/api/status')).json()).toMatchObject({
+      defaultImageModel: null,
+      defaultVideoModel: null,
+    });
   });
 
-  it('returns image models only', async () => {
+  it('returns image and video models with what each can do', async () => {
     const { call } = await setup(() =>
       json({
         'a/img': {
@@ -74,15 +95,30 @@ describe('dashboard handler', () => {
           output: ['image'],
           supported_params: { text: true, mask: false, quality: true, edit: false },
         },
+        'a/cutout': {
+          providers: [],
+          output: ['image'],
+          supported_params: { text: false, mask: false, quality: false, edit: true },
+        },
         'b/vid': {
           providers: [],
           output: ['video'],
-          supported_params: { text: true, mask: false, quality: false, edit: false },
+          supported_params: { text: true, mask: false, quality: false, edit: true },
+          seconds: [4, 8],
         },
       }),
     );
     const data = await (await call('/api/models')).json();
-    expect(data.models.map((model: { id: string }) => model.id)).toEqual(['a/img']);
+    const byId = Object.fromEntries(data.models.map((model: { id: string }) => [model.id, model]));
+    expect(Object.keys(byId).toSorted()).toEqual(['a/cutout', 'a/img', 'b/vid']);
+    expect(byId['a/img']).toMatchObject({ output: 'image', text: true, edit: false });
+    expect(byId['a/cutout']).toMatchObject({ output: 'image', text: false, edit: true });
+    expect(byId['b/vid']).toMatchObject({
+      output: 'video',
+      text: true,
+      edit: true,
+      seconds: [4, 8],
+    });
   });
 
   it('returns credits and maps upstream errors', async () => {
@@ -114,6 +150,7 @@ describe('dashboard handler', () => {
         model: 'm',
         output_dir: '/tmp/elsewhere',
         images: ['/etc/passwd'],
+        masks: ['/etc/passwd'],
       }),
     });
     expect(response.status).toBe(200);
@@ -121,7 +158,11 @@ describe('dashboard handler', () => {
     expect(data.path.startsWith(outputDir)).toBe(true);
     expect(data.fileUrl).toBe(`/files/${encodeURIComponent(data.name)}`);
     expect(data.cost).toBe(0.02);
-    expect(JSON.parse(calls[0].init.body as string).image).toBeUndefined();
+    expect(data.kind).toBe('image');
+    expect(calls[0].url).toBe('http://api.test/v1/openai/images/generations');
+    const sent = JSON.parse(calls[0].init.body as string);
+    expect(sent.image).toBeUndefined();
+    expect(sent.mask).toBeUndefined();
 
     const file = await call(data.fileUrl);
     expect(file.status).toBe(200);
@@ -135,6 +176,180 @@ describe('dashboard handler', () => {
       fileUrl: data.fileUrl,
       kind: 'image',
     });
+  });
+
+  it('sends an uploaded image to the edit endpoint as a data URI', async () => {
+    const { call, calls } = await setup((url) =>
+      url.startsWith('http://api.test')
+        ? json({ data: [{ url: 'http://cdn.test/a.png' }] })
+        : png(),
+    );
+    const response = await call(
+      '/api/generate',
+      postJson({ prompt: 'make it blue', model: 'm', inputs: [{ data: DATA_URI }] }),
+    );
+    expect(response.status).toBe(200);
+    expect(calls[0].url).toBe(EDITS);
+    expect(JSON.parse(calls[0].init.body as string)).toMatchObject({
+      prompt: 'make it blue',
+      image: DATA_URI,
+    });
+    const data = await response.json();
+    expect(data.kind).toBe('image');
+    expect(data.record).toMatchObject({ kind: 'edit', inputs: { images: ['data-uri'] } });
+  });
+
+  it('sends a saved gallery image as a file, in the order given', async () => {
+    const { call, calls, outputDir } = await setup((url) =>
+      url.startsWith('http://api.test')
+        ? json({ data: [{ url: 'http://cdn.test/a.png' }] })
+        : png(),
+    );
+    await writeFile(join(outputDir, 'source.png'), new Uint8Array([1, 2, 3]));
+    const response = await call(
+      '/api/generate',
+      postJson({ model: 'm', inputs: [{ data: DATA_URI }, { saved: 'source.png' }] }),
+    );
+    expect(response.status).toBe(200);
+    expect(calls[0].url).toBe(EDITS);
+    const form = calls[0].init.body as FormData;
+    const [first, second] = form.getAll('image[]');
+    expect(first).toBe(DATA_URI);
+    expect((second as File).name).toBe('source.png');
+    expect([...new Uint8Array(await (second as File).arrayBuffer())]).toEqual([1, 2, 3]);
+    expect(form.get('prompt')).toBeNull();
+  });
+
+  it('generates a video from text and serves it', async () => {
+    const { call, calls } = await setup((url) =>
+      url.startsWith('http://api.test')
+        ? json({ data: [{ url: 'http://cdn.test/a.mp4' }], cost: 0.5 })
+        : mp4(),
+    );
+    const response = await call(
+      '/api/generate',
+      postJson({
+        prompt: 'a fox runs',
+        model: 'v/m',
+        output: 'video',
+        seconds: 5,
+        size: '1280x720',
+        quality: 'high',
+        output_format: 'png',
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(calls[0].url).toBe(VIDEOS);
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({
+      model: 'v/m',
+      prompt: 'a fox runs',
+      size: '1280x720',
+      seconds: 5,
+      response_format: 'url',
+    });
+    const data = await response.json();
+    expect(data.name.endsWith('.mp4')).toBe(true);
+    expect(data.kind).toBe('video');
+    expect(data.record).toMatchObject({ kind: 'video', requested: { seconds: 5 } });
+    const file = await call(data.fileUrl);
+    expect(file.status).toBe(200);
+    expect(file.headers.get('content-type')).toBe('video/mp4');
+  });
+
+  it('generates a video from an image without a prompt', async () => {
+    const { call, calls } = await setup((url) =>
+      url.startsWith('http://api.test')
+        ? json({ data: [{ url: 'http://cdn.test/a.mp4' }] })
+        : mp4(),
+    );
+    const response = await call(
+      '/api/generate',
+      postJson({ model: 'v/m', output: 'video', seconds: 'auto', inputs: [{ data: DATA_URI }] }),
+    );
+    expect(response.status).toBe(200);
+    expect(calls[0].url).toBe(VIDEOS);
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({
+      model: 'v/m',
+      seconds: 'auto',
+      response_format: 'url',
+      image: DATA_URI,
+    });
+    expect((await response.json()).kind).toBe('video');
+  });
+
+  it('does not send seconds for an image', async () => {
+    const { call, calls } = await setup(() => json({ data: [{ b64_json: 'AQID' }] }));
+    const response = await call(
+      '/api/generate',
+      postJson({ prompt: 'x', model: 'm', seconds: 5, ephemeral: true }),
+    );
+    expect(response.status).toBe(200);
+    expect(JSON.parse(calls[0].init.body as string).seconds).toBeUndefined();
+  });
+
+  it('accepts an upload of exactly 10 MB and rejects one byte more', async () => {
+    const { call, calls } = await setup(() => json({ data: [{ b64_json: 'AQID' }] }));
+    // 10 485 760 bytes are 3 495 253 full base64 groups and one more byte.
+    const groups = 'AAAA'.repeat(3_495_253);
+    const post = (tail: string) =>
+      call(
+        '/api/generate',
+        postJson({
+          model: 'm',
+          ephemeral: true,
+          inputs: [{ data: `data:image/png;base64,${groups}${tail}` }],
+        }),
+      );
+    expect((await post('AAA=')).status).toBe(400);
+    expect(calls).toHaveLength(0);
+    expect((await post('AA==')).status).toBe(200);
+  });
+
+  it('rejects unusable inputs before anything is billed', async () => {
+    const { call, calls, outputDir } = await setup(() => json({}));
+    await writeFile(join(outputDir, 'clip.mp4'), makeMp4());
+    await writeFile(join(outputDir, 'ok.png'), makePng(2, 2));
+    await writeFile(join(outputDir, 'ok.png.json'), '{}');
+    await mkdir(join(outputDir, 'folder.png'));
+    const saved = (name: unknown) => ({ prompt: 'x', model: 'm', inputs: [{ saved: name }] });
+    const data = (uri: unknown) => ({ prompt: 'x', model: 'm', inputs: [{ data: uri }] });
+    const bodies: Record<string, unknown> = {
+      'neither prompt nor input': { model: 'm' },
+      'an empty input list and no prompt': { model: 'm', inputs: [] },
+      'a path instead of an entry': { prompt: 'x', inputs: ['/etc/passwd'] },
+      'an entry with an unknown form': { prompt: 'x', inputs: [{ path: '/etc/passwd' }] },
+      'an entry with both forms': { prompt: 'x', inputs: [{ saved: 'ok.png', data: DATA_URI }] },
+      'an entry with an extra field': { prompt: 'x', inputs: [{ saved: 'ok.png', dir: '/etc' }] },
+      'inputs that are not a list': { prompt: 'x', inputs: { saved: 'ok.png' } },
+      'seventeen inputs': {
+        prompt: 'x',
+        inputs: Array.from({ length: 17 }, () => ({ data: DATA_URI })),
+      },
+      'a name with a directory': saved('../ok.png'),
+      'an absolute path as name': saved(join(outputDir, 'ok.png')),
+      'a saved video': saved('clip.mp4'),
+      'a sidecar': saved('ok.png.json'),
+      'a missing file': saved('missing.png'),
+      'a directory': saved('folder.png'),
+      'an empty name': saved(''),
+      'a name that is not a string': saved(7),
+      'a web address as data': data('http://example.com/a.png'),
+      'a data URI that is not an image': data('data:text/html;base64,AAAA'),
+      'an SVG': data('data:image/svg+xml;base64,AAAA'),
+      'a data URI that is not base64': data('data:image/png,AAAA'),
+      'a data URI with junk in it': data('data:image/png;base64,AA AA'),
+      'an empty data URI': data('data:image/png;base64,'),
+      'data that is not a string': data(7),
+      'an unknown output': { prompt: 'x', output: 'audio' },
+      'zero seconds': { prompt: 'x', output: 'video', seconds: 0 },
+      'too many seconds': { prompt: 'x', output: 'video', seconds: 61 },
+    };
+    for (const [label, body] of Object.entries(bodies)) {
+      const response = await call('/api/generate', postJson(body));
+      expect([label, response.status]).toEqual([label, 400]);
+      expect((await response.json()).error.code).toBe('INVALID_REQUEST');
+    }
+    expect(calls).toHaveLength(0);
   });
 
   it('rejects an empty or malformed generate body', async () => {
@@ -520,19 +735,89 @@ describe('dashboard generation records', () => {
     expect(gallery.spent).toBe(0.02);
   });
 
-  it('lists and counts images only, never a video with a costly sidecar', async () => {
+  it('lists videos next to images and counts what they cost', async () => {
     const { call, add, outputDir } = await seeded();
     await add('fox.png', { prompt: 'a fox', cost: 0.25 });
     await add('clip.mp4', { kind: 'video', prompt: 'a fox runs', cost: 5 }, makeMp4());
     await writeFile(join(outputDir, 'notes.json'), '{}');
     const all = await get(call, '/api/images');
-    expect(all.items.map((item: { name: string }) => item.name)).toEqual(['fox.png']);
-    expect(all.total).toBe(1);
-    expect(all.spent).toBe(0.25);
-    const searched = await get(call, '/api/images?q=fox');
-    expect(searched).toMatchObject({ total: 1, spent: 0.25 });
+    expect(all.items.map((item: { name: string; kind: string }) => [item.name, item.kind])).toEqual(
+      [
+        ['fox.png', 'image'],
+        ['clip.mp4', 'video'],
+      ],
+    );
+    expect(all.items[1]).toMatchObject({
+      fileUrl: '/files/clip.mp4',
+      record: { kind: 'video', prompt: 'a fox runs' },
+    });
+    expect(all).toMatchObject({ total: 2, spent: 5.25 });
+    const searched = await get(call, '/api/images?q=runs');
+    expect(searched).toMatchObject({ total: 1, spent: 5 });
+    expect(searched.items[0].name).toBe('clip.mp4');
     const paged = await get(call, '/api/images?limit=1&offset=1');
-    expect(paged).toMatchObject({ total: 1, spent: 0.25, items: [] });
-    expect((await get(call, '/api/images?q=runs')).total).toBe(0);
+    expect(paged).toMatchObject({ total: 2, spent: 5.25 });
+    expect(paged.items.map((item: { name: string }) => item.name)).toEqual(['clip.mp4']);
+  });
+});
+
+describe('dashboard file ranges', () => {
+  async function withClip() {
+    const env = await setup(() => json({}));
+    await writeFile(
+      join(env.outputDir, 'clip.mp4'),
+      new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+    );
+    const fetchRange = (range?: string) =>
+      env.call('/files/clip.mp4', range === undefined ? {} : { headers: { range } });
+    const bytes = async (response: Response) => [...new Uint8Array(await response.arrayBuffer())];
+    return { ...env, fetchRange, bytes };
+  }
+
+  it('answers a range with that part of the file', async () => {
+    const { fetchRange, bytes } = await withClip();
+    const cases: Array<[string, number[], string]> = [
+      ['bytes=2-5', [2, 3, 4, 5], 'bytes 2-5/10'],
+      ['bytes=0-0', [0], 'bytes 0-0/10'],
+      ['bytes=7-', [7, 8, 9], 'bytes 7-9/10'],
+      ['bytes=-3', [7, 8, 9], 'bytes 7-9/10'],
+      ['bytes=-99', [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 'bytes 0-9/10'],
+      ['bytes=4-100', [4, 5, 6, 7, 8, 9], 'bytes 4-9/10'],
+    ];
+    for (const [range, expected, contentRange] of cases) {
+      const response = await fetchRange(range);
+      expect([range, response.status]).toEqual([range, 206]);
+      expect(response.headers.get('content-range')).toBe(contentRange);
+      expect(response.headers.get('content-type')).toBe('video/mp4');
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(await bytes(response)).toEqual(expected);
+    }
+  });
+
+  it('answers 416 for a range outside the file', async () => {
+    const { fetchRange } = await withClip();
+    for (const range of ['bytes=10-', 'bytes=10-12', 'bytes=-0']) {
+      const response = await fetchRange(range);
+      expect([range, response.status]).toEqual([range, 416]);
+      expect(response.headers.get('content-range')).toBe('bytes */10');
+    }
+  });
+
+  it('sends the whole file without a range or with one it cannot parse', async () => {
+    const { fetchRange, bytes } = await withClip();
+    for (const range of [
+      undefined,
+      'bytes=5-2',
+      'bytes=0-1,3-4',
+      'items=0-1',
+      'bytes=a-b',
+      'bytes=-',
+    ]) {
+      const response = await fetchRange(range);
+      expect([range, response.status]).toEqual([range, 200]);
+      expect(response.headers.get('accept-ranges')).toBe('bytes');
+      expect(response.headers.get('content-range')).toBeNull();
+      expect(await bytes(response)).toHaveLength(10);
+    }
   });
 });

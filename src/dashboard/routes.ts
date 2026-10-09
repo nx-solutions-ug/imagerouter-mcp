@@ -1,12 +1,19 @@
-import { readFile } from 'node:fs/promises';
+import { open, readFile, stat } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { z } from 'zod';
 import { ImageRouterError } from '../lib/errors.js';
 import { type Deps, runGeneration } from '../lib/generation.js';
 import { type GenerationRecord, readRecord } from '../lib/metadata.js';
 import { summariseModels } from '../lib/models.js';
-import { MEDIA_TYPES, type SavedEntry, listSaved, resolveSavedFile } from '../lib/output.js';
-import { model, outputFormat, prompt, quality, saving, size } from '../tools/schemas.js';
+import {
+  MEDIA_TYPES,
+  type SavedEntry,
+  listSaved,
+  mediaKind,
+  resolveSavedFile,
+} from '../lib/output.js';
+import type { GenerationKind } from '../lib/types.js';
+import { model, outputFormat, prompt, quality, saving, seconds, size } from '../tools/schemas.js';
 
 const ASSET_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -16,17 +23,79 @@ const ASSET_TYPES: Record<string, string> = {
   '.map': 'application/json',
 };
 
-// The tool schema minus `output_dir`, `images` and `masks`: the dashboard never takes paths.
+const MAX_INPUTS = 16;
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const IMAGE_DATA_URI = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
+
+// The tool schemas minus `output_dir`, `images` and `masks`: the dashboard never takes paths.
+// `inputs` takes their place and is checked entry by entry in `resolveInputs`.
 const { output_dir: _outputDir, ...savingFields } = saving;
 const generateBody = z.object({
-  prompt,
+  prompt: prompt.optional(),
   model,
   size,
   quality,
   output_format: outputFormat,
+  output: z.enum(['image', 'video']).optional(),
+  seconds,
+  inputs: z.array(z.unknown()).max(MAX_INPUTS).optional(),
   filename: savingFields.filename,
   ephemeral: savingFields.ephemeral,
 });
+
+const invalid = (message: string): ImageRouterError =>
+  new ImageRouterError(message, 'INVALID_REQUEST');
+
+// Turns the browser's inputs into what `runGeneration` takes: the path of a saved image, or the
+// data URI of an upload. The browser only ever names a file in the output directory.
+async function resolveInputs(dir: string, inputs: unknown[]): Promise<string[]> {
+  const images: string[] = [];
+  for (const [index, input] of inputs.entries()) {
+    const label = `Input ${index + 1}`;
+    const single = typeof input === 'object' && input !== null && Object.keys(input).length === 1;
+    const { saved, data } = (single ? input : {}) as { saved?: unknown; data?: unknown };
+    if (typeof data === 'string') {
+      if (!IMAGE_DATA_URI.test(data)) {
+        throw invalid(`${label} is not a PNG, JPEG, WebP or GIF data URI.`);
+      }
+      const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
+      const characters = data.length - data.indexOf(',') - 1 - padding;
+      if (Math.floor((characters * 3) / 4) > MAX_UPLOAD_BYTES) {
+        throw invalid(`${label} is larger than 10 MB.`);
+      }
+      images.push(data);
+    } else if (typeof saved === 'string') {
+      const path = mediaKind(saved) === 'image' ? resolveSavedFile(dir, saved) : null;
+      const info = path ? await stat(path).catch(() => null) : null;
+      if (!path || !info?.isFile()) throw invalid(`${label} is not a saved image.`);
+      images.push(path);
+    } else {
+      throw invalid(
+        `${label} must be { "saved": "<file name>" } or { "data": "<image data URI>" }.`,
+      );
+    }
+  }
+  return images;
+}
+
+// A single byte range of a file of `size` bytes: `null` when there is none to honour (the whole
+// file is sent), 'unsatisfiable' when it lies outside the file.
+function parseRange(
+  header: string | null,
+  size: number,
+): { start: number; end: number } | 'unsatisfiable' | null {
+  const match = header ? /^bytes=(\d*)-(\d*)$/.exec(header.trim()) : null;
+  if (!match || (match[1] === '' && match[2] === '')) return null;
+  if (match[1] === '') {
+    const length = Number(match[2]);
+    if (length === 0 || size === 0) return 'unsatisfiable';
+    return { start: Math.max(size - length, 0), end: size - 1 };
+  }
+  const start = Number(match[1]);
+  const end = match[2] === '' ? size - 1 : Math.min(Number(match[2]), size - 1);
+  if (match[2] !== '' && Number(match[2]) < start) return null;
+  return start >= size ? 'unsatisfiable' : { start, end };
+}
 
 function send(data: unknown, status = 200): Response {
   return Response.json(data, { status, headers: { 'cache-control': 'no-store' } });
@@ -90,16 +159,15 @@ function spentOn(records: Array<GenerationRecord | null>): number {
   return Math.round(total * 1e6) / 1e6;
 }
 
-async function listImages(dir: string, options: { query: string; limit: number; offset: number }) {
-  const everything = await listSaved(dir, { limit: Number.MAX_SAFE_INTEGER });
-  // Videos share the directory but are not part of the image gallery, its total or its spend.
-  const images = everything.items.filter((item) => item.kind === 'image');
+// Images and videos alike: the route is still called `/api/images` for the pages that use it.
+async function listMedia(dir: string, options: { query: string; limit: number; offset: number }) {
+  const { items } = await listSaved(dir, { limit: Number.MAX_SAFE_INTEGER });
   const records: Array<GenerationRecord | null> = [];
-  for (let start = 0; start < images.length; start += READ_BATCH) {
-    const batch = images.slice(start, start + READ_BATCH);
+  for (let start = 0; start < items.length; start += READ_BATCH) {
+    const batch = items.slice(start, start + READ_BATCH);
     records.push(...(await Promise.all(batch.map((item) => recordOf(item.path)))));
   }
-  const found = images
+  const found = items
     .map((item, index) => ({ item, record: records[index] ?? null }))
     .filter(({ item, record }) => matches(item, record, options.query));
   return {
@@ -136,7 +204,7 @@ export function createDashboardHandler(options: {
     }
   }
 
-  async function savedFile(encoded: string): Promise<Response> {
+  async function savedFile(encoded: string, range: string | null): Promise<Response> {
     let name: string;
     try {
       name = decodeURIComponent(encoded);
@@ -145,10 +213,31 @@ export function createDashboardHandler(options: {
     }
     const path = resolveSavedFile(deps.config.outputDir, name);
     if (!path) return fail(400, 'INVALID_REQUEST', 'Invalid file name');
+    const headers = {
+      'content-type': MEDIA_TYPES[extname(name).slice(1).toLowerCase().replace('jpeg', 'jpg')],
+      'cache-control': 'private, max-age=3600',
+      'accept-ranges': 'bytes',
+    };
     try {
-      const type = MEDIA_TYPES[extname(name).slice(1).toLowerCase().replace('jpeg', 'jpg')];
-      return new Response(await readFile(path), {
-        headers: { 'content-type': type, 'cache-control': 'private, max-age=3600' },
+      // A browser seeks in a video by asking for parts of it, and only that part is read.
+      const { size } = await stat(path);
+      const part = parseRange(range, size);
+      if (part === null) return new Response(await readFile(path), { headers });
+      if (part === 'unsatisfiable') {
+        const response = fail(416, 'INVALID_REQUEST', 'Range not satisfiable');
+        response.headers.set('content-range', `bytes */${size}`);
+        return response;
+      }
+      const bytes = Buffer.alloc(part.end - part.start + 1);
+      const file = await open(path);
+      try {
+        await file.read(bytes, 0, bytes.length, part.start);
+      } finally {
+        await file.close();
+      }
+      return new Response(bytes, {
+        status: 206,
+        headers: { ...headers, 'content-range': `bytes ${part.start}-${part.end}/${size}` },
       });
     } catch {
       return fail(404, 'NOT_FOUND', 'File not found');
@@ -163,9 +252,29 @@ export function createDashboardHandler(options: {
     if (!parsed.success) {
       return fail(400, 'INVALID_REQUEST', parsed.error.issues[0]?.message ?? 'Invalid request');
     }
-    const result = await runGeneration(deps, 'image', parsed.data);
+    const { output = 'image', inputs = [], ...fields } = parsed.data;
+    // Everything is checked here, before the request is billed.
+    const images = await resolveInputs(deps.config.outputDir, inputs);
+    if (!fields.prompt && images.length === 0) {
+      throw invalid('Provide a prompt, an input image, or both.');
+    }
+    const kind: GenerationKind =
+      output === 'video' ? 'video' : images.length > 0 ? 'edit' : 'image';
+    const result = await runGeneration(deps, kind, {
+      ...fields,
+      // As in generate_video, quality is an image setting. `runGeneration` itself drops the
+      // format of a video and the duration of an image.
+      ...(kind === 'video' ? { quality: undefined } : {}),
+      ...(images.length > 0 ? { images } : {}),
+    });
     const name = basename(result.path);
-    return send({ ...result, name, fileUrl: fileUrl(name), record: await recordOf(result.path) });
+    return send({
+      ...result,
+      name,
+      kind: mediaKind(name) ?? output,
+      fileUrl: fileUrl(name),
+      record: await recordOf(result.path),
+    });
   }
 
   async function route(request: Request): Promise<Response> {
@@ -192,12 +301,11 @@ export function createDashboardHandler(options: {
           hasApiKey: Boolean(deps.config.apiKey),
           outputDir: deps.config.outputDir,
           defaultImageModel: deps.config.defaultImageModel ?? null,
+          defaultVideoModel: deps.config.defaultVideoModel ?? null,
         });
       }
       if (pathname === '/api/models') {
-        return send(
-          summariseModels(await deps.client.listModels(), { output: 'image', limit: 500 }),
-        );
+        return send(summariseModels(await deps.client.listModels(), { limit: 1000 }));
       }
       if (pathname === '/api/credits') return send(await deps.client.getCredits());
       if (pathname === '/api/images') {
@@ -207,10 +315,12 @@ export function createDashboardHandler(options: {
           .trim()
           .slice(0, MAX_QUERY_LENGTH)
           .toLowerCase();
-        return send(await listImages(deps.config.outputDir, { query, limit, offset }));
+        return send(await listMedia(deps.config.outputDir, { query, limit, offset }));
       }
       if (pathname.startsWith('/api/')) return fail(404, 'NOT_FOUND', 'Unknown API route');
-      if (pathname.startsWith('/files/')) return await savedFile(pathname.slice('/files/'.length));
+      if (pathname.startsWith('/files/')) {
+        return await savedFile(pathname.slice('/files/'.length), request.headers.get('range'));
+      }
       return await asset(pathname);
     } catch (error) {
       return failFrom(error);

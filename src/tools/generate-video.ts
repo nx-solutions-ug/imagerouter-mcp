@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { ImageRouterError, formatToolError } from '../lib/errors.js';
 import { type Deps, runGeneration } from '../lib/generation.js';
 import { withProgress } from './progress.js';
-import { mediaInputs, model, ok, prompt, saving, size } from './schemas.js';
+import { mediaInputs, model, ok, prompt, saving, seconds, size } from './schemas.js';
 
 export function registerGenerateVideo(server: McpServer, deps: Deps): void {
   server.registerTool(
@@ -16,10 +16,7 @@ export function registerGenerateVideo(server: McpServer, deps: Deps): void {
         images: mediaInputs.optional().describe('Start image(s) for image-to-video.'),
         model,
         size,
-        seconds: z
-          .union([z.literal('auto'), z.number().min(1).max(60)])
-          .optional()
-          .describe('Duration. Accepted values depend on the model; see list_models.'),
+        seconds,
         ...saving,
       }),
       annotations: { readOnlyHint: false, openWorldHint: true },

@@ -18,6 +18,10 @@ export const quality = z
   .optional()
   .describe('Only honoured by models that support quality.');
 export const outputFormat = z.enum(['webp', 'jpeg', 'png']).optional().describe('Default webp.');
+export const seconds = z
+  .union([z.literal('auto'), z.number().min(1).max(60)])
+  .optional()
+  .describe('Duration. Accepted values depend on the model; see list_models.');
 export const mediaInputs = z
   .array(z.string().min(1))
   .max(16)

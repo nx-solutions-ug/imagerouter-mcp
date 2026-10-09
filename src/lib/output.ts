@@ -169,6 +169,13 @@ export async function ensureWritableDir(dir: string): Promise<void> {
   }
 }
 
+// What a saved file is, judged by its extension; `null` for anything that is not media.
+export function mediaKind(name: string): 'image' | 'video' | null {
+  const extension = normalise(extname(name));
+  if (!extension) return null;
+  return VIDEO_EXTENSIONS.has(extension) ? 'video' : 'image';
+}
+
 export interface SavedEntry {
   name: string;
   path: string;
@@ -184,8 +191,8 @@ export async function listSaved(
   const names = await readdir(dir).catch(() => [] as string[]);
   const entries: Array<SavedEntry & { time: number }> = [];
   for (const name of names) {
-    const extension = normalise(extname(name));
-    if (!extension) continue;
+    const kind = mediaKind(name);
+    if (!kind) continue;
     const info = await stat(join(dir, name)).catch(() => null);
     if (!info?.isFile()) continue;
     entries.push({
@@ -193,7 +200,7 @@ export async function listSaved(
       path: join(dir, name),
       size: info.size,
       modified: info.mtime.toISOString(),
-      kind: VIDEO_EXTENSIONS.has(extension) ? 'video' : 'image',
+      kind,
       time: info.mtimeMs,
     });
   }
@@ -207,5 +214,5 @@ export async function listSaved(
 
 export function resolveSavedFile(dir: string, name: string): string | null {
   if (!isBareFilename(name)) return null;
-  return normalise(extname(name)) ? join(dir, name) : null;
+  return mediaKind(name) ? join(dir, name) : null;
 }

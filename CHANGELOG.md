@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.1.0...v1.1.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* keep the details dialog compact when the prompt is long ([7961cbe](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/7961cbec0995c8968802b4a713a28f0b3ab91666))
+
 # [1.1.0](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.0.1...v1.1.0) (2026-10-07)
 
 

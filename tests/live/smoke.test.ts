@@ -6,6 +6,7 @@ import { resolveConfig } from '../../src/lib/config.js';
 import { runGeneration } from '../../src/lib/generation.js';
 import { ImageRouterClient } from '../../src/lib/imagerouter-client.js';
 import { summariseModels } from '../../src/lib/models.js';
+import { makePng, toBase64 } from '../helpers/images.js';
 
 // Uses only the free test models, so it costs nothing. Skipped without a key.
 describe.skipIf(!process.env.IMAGEROUTER_API_KEY)('live ImageRouter API', () => {
@@ -53,6 +54,14 @@ describe.skipIf(!process.env.IMAGEROUTER_API_KEY)('live ImageRouter API', () => 
       model: 'test/test',
       images: [source.path],
     });
+    expect((await stat(edited.path)).size).toBeGreaterThan(0);
+  });
+
+  // One video call per run: the free video model is rate limited to about one call a second.
+  it('edits an image from a data URI, as the dashboard sends an upload', async () => {
+    const deps = await setup();
+    const upload = `data:image/png;base64,${toBase64(makePng(64, 64))}`;
+    const edited = await runGeneration(deps, 'edit', { model: 'test/test', images: [upload] });
     expect((await stat(edited.path)).size).toBeGreaterThan(0);
   });
 

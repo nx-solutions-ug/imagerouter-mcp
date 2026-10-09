@@ -1,9 +1,18 @@
-interface Model {
-  id: string;
-  quality: boolean;
-  sizes?: string[];
-  min_price: number | null;
-}
+import { type InputList, createInputList } from './inputs.js';
+import {
+  MODES,
+  MODE_INFO,
+  type Mode,
+  type Model,
+  inputMode,
+  isMode,
+  modelKey,
+  secondsFor,
+  sizesFor,
+  supports,
+} from './modes.js';
+
+type MediaKind = 'image' | 'video';
 
 // A generation record as the dashboard uses it. Records are files on disk that anyone could have
 // edited, so `toRecord` re-checks every field before it reaches the DOM.
@@ -13,7 +22,7 @@ interface GenerationRecord {
   model: string;
   created?: string;
   prompt?: string;
-  requested: { size?: string; quality?: string; output_format?: string };
+  requested: { size?: string; quality?: string; output_format?: string; seconds?: string };
   width?: number;
   height?: number;
   cost?: number;
@@ -25,6 +34,7 @@ interface Generated {
   name: string;
   path: string;
   fileUrl: string;
+  kind?: unknown;
   url?: string;
   model: string;
   cost?: number;
@@ -38,21 +48,22 @@ interface GalleryItem {
   name: string;
   path: string;
   fileUrl: string;
-  kind: 'image' | 'video';
+  kind: MediaKind;
   record?: unknown;
 }
 
-// What the detail view shows: an image, with or without a recorded history.
+// What the detail view shows: an image or a video, with or without a recorded history.
 interface Detail {
   name: string;
   path: string;
   fileUrl: string;
+  kind: MediaKind;
   record: GenerationRecord | null;
 }
 
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const usd = (value: number): string => `$${value.toFixed(value < 1 ? 4 : 2)}`;
-const MODEL_KEY = 'imagerouter:model';
+const MODE_KEY = 'imagerouter:mode';
 const SEARCH_DELAY_MS = 250;
 
 const text = (value: unknown): string | undefined =>
@@ -61,6 +72,7 @@ const amount = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 const pixels = (width?: number, height?: number): string | undefined =>
   width && height ? `${width}×${height}` : undefined;
+const mediaKind = (value: unknown): MediaKind => (value === 'video' ? 'video' : 'image');
 
 function toRecord(value: unknown): GenerationRecord | null {
   if (typeof value !== 'object' || value === null) return null;
@@ -78,6 +90,7 @@ function toRecord(value: unknown): GenerationRecord | null {
       size: text(asked.size),
       quality: text(asked.quality),
       output_format: text(asked.output_format),
+      seconds: asked.seconds === 'auto' ? 'auto' : amount(asked.seconds)?.toString(),
     },
     width: amount(raw.width),
     height: amount(raw.height),
@@ -92,9 +105,15 @@ const spentLabel = (value: number): string =>
   value > 0 && value < 0.01 ? usd(value) : `$${value.toFixed(2)}`;
 
 let models: Model[] = [];
-// The model the user picked. Only the select's change event and a successful generation move it;
-// filtering never does, so clearing the filter brings the choice back.
-let chosenModel: string | null = null;
+// Shown in place of the model hint while there are no models: loading, or why loading failed.
+let modelsNote = 'Loading models…';
+let mode: Mode = 'text-to-image';
+// The model the user picked in each mode. Only the select's change event and a successful
+// generation move it; filtering never does, so clearing the filter brings the choice back.
+const chosenModel: Partial<Record<Mode, string | null>> = {};
+// Counts the picks per mode, so a generation can tell whether the user chose again meanwhile.
+const picks: Partial<Record<Mode, number>> = {};
+let inputs: InputList;
 let galleryRun = 0;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -109,6 +128,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const body = await response.json().catch(() => null);
   if (!response.ok) {
+    // The server refuses an oversized body before the handler runs, so there is no message.
+    if (response.status === 413) {
+      throw new Error('The images are too large to send. Use fewer or smaller images.');
+    }
     throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
   }
   return body as T;
@@ -134,30 +157,34 @@ async function loadBalance(): Promise<void> {
   }
 }
 
+function priceLabel(model: Model): string {
+  if (model.min_price === 0) return 'free';
+  return model.min_price === null ? '' : `from ${usd(model.min_price)}`;
+}
+
 function renderModels(): void {
   const search = el<HTMLInputElement>('model-search').value.trim().toLowerCase();
   const freeOnly = el<HTMLInputElement>('free-only').checked;
   const select = el<HTMLSelectElement>('model');
   const visible = models.filter(
     (model) =>
-      (!search || model.id.toLowerCase().includes(search)) && (!freeOnly || model.min_price === 0),
+      supports(model, mode) &&
+      (!search || model.id.toLowerCase().includes(search)) &&
+      (!freeOnly || model.min_price === 0),
   );
   select.replaceChildren(
     ...visible.map((model) => {
-      const price =
-        model.min_price === 0
-          ? 'free'
-          : model.min_price === null
-            ? ''
-            : `from ${usd(model.min_price)}`;
+      const price = priceLabel(model);
       return new Option(price ? `${model.id} · ${price}` : model.id, model.id);
     }),
   );
-  if (chosenModel && visible.some((model) => model.id === chosenModel)) {
-    select.value = chosenModel;
+  const chosen = chosenModel[mode];
+  if (chosen && visible.some((model) => model.id === chosen)) {
+    select.value = chosen;
   } else {
-    // The chosen model is hidden by the filter. Never fall back to a paid model: take the first
-    // free one, or leave the required select empty so the form cannot be submitted.
+    // The chosen model is hidden by the filter or cannot do this mode. Never fall back to a paid
+    // model: take the first free one, or leave the required select empty so the form cannot be
+    // submitted.
     const free = visible.find((model) => model.min_price === 0);
     if (free) {
       select.value = free.id;
@@ -172,21 +199,54 @@ function renderModels(): void {
 }
 
 function renderModelOptions(): void {
+  const { output } = MODE_INFO[mode];
   const model = models.find((candidate) => candidate.id === el<HTMLSelectElement>('model').value);
-  const sizes = model?.sizes?.length
-    ? model.sizes
-    : ['auto', '1024x1024', '1536x1024', '1024x1536'];
-  el<HTMLSelectElement>('size').replaceChildren(...sizes.map((size) => new Option(size, size)));
+  el<HTMLSelectElement>('size').replaceChildren(
+    ...sizesFor(model, output).map((size) => new Option(size, size)),
+  );
+  el<HTMLSelectElement>('seconds').replaceChildren(
+    ...secondsFor(model).map((seconds) => new Option(seconds, seconds)),
+  );
   el<HTMLSelectElement>('quality').disabled = !model?.quality;
   el('model-info').textContent = model
     ? model.min_price === 0
       ? 'Free model'
       : model.min_price === null
         ? 'Price unknown'
-        : `From ${usd(model.min_price)} per image`
+        : `From ${usd(model.min_price)} per ${output}`
     : el<HTMLSelectElement>('model').options.length > 1
       ? 'Choose a model'
-      : 'No model matches the filter';
+      : models.length === 0
+        ? modelsNote
+        : models.some((candidate) => supports(candidate, mode))
+          ? 'No model matches the filter'
+          : 'No model offers this mode';
+}
+
+// Shows the fields of a mode and its models. It never submits: generating spends credits.
+function setMode(next: Mode): void {
+  mode = next;
+  remember(MODE_KEY, next);
+  const { output, takesInput } = MODE_INFO[next];
+  const isVideo = output === 'video';
+  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="mode"]')) {
+    radio.checked = radio.value === next;
+  }
+  el('inputs-field').classList.toggle('hidden', !takesInput);
+  el('quality-field').classList.toggle('hidden', isVideo);
+  el('format-field').classList.toggle('hidden', isVideo);
+  el('seconds-field').classList.toggle('hidden', !isVideo);
+  el('video-hint').classList.toggle('hidden', !isVideo);
+  const prompt = el<HTMLTextAreaElement>('prompt');
+  // Some models that take an image, such as background removal, take no prompt.
+  prompt.required = !takesInput;
+  prompt.placeholder = takesInput ? 'Optional for some models' : '';
+  renderModels();
+}
+
+function addInputFiles(files: File[]): void {
+  if (files.length === 0) return;
+  el('inputs-info').textContent = inputs.addFiles(files).join(' ');
 }
 
 function copyButton(label: string, value: string, className = 'btn btn-xs'): HTMLButtonElement {
@@ -216,11 +276,36 @@ function actionButton(label: string, onClick: () => void, className: string): HT
   return button;
 }
 
+// Shows a saved file in the image or the video element of a pair and hides the other.
+function showMedia(
+  image: HTMLImageElement,
+  video: HTMLVideoElement,
+  media: { kind: MediaKind; fileUrl: string; name: string },
+): void {
+  const isVideo = media.kind === 'video';
+  image.classList.toggle('hidden', isVideo);
+  video.classList.toggle('hidden', !isVideo);
+  video.pause();
+  if (isVideo) {
+    image.removeAttribute('src');
+    video.src = media.fileUrl;
+    video.setAttribute('aria-label', media.name);
+  } else {
+    video.removeAttribute('src');
+    video.load();
+    image.src = media.fileUrl;
+    image.alt = media.name;
+  }
+}
+
 function showResult(result: Generated): void {
+  const kind = mediaKind(result.kind);
   el('result').classList.remove('hidden');
-  const image = el<HTMLImageElement>('result-image');
-  image.src = result.fileUrl;
-  image.alt = result.name;
+  showMedia(el<HTMLImageElement>('result-image'), el<HTMLVideoElement>('result-video'), {
+    kind,
+    fileUrl: result.fileUrl,
+    name: result.name,
+  });
 
   const badge = (label: string): HTMLSpanElement => {
     const span = document.createElement('span');
@@ -243,6 +328,7 @@ function showResult(result: Generated): void {
           name: result.name,
           path: result.path,
           fileUrl: result.fileUrl,
+          kind,
           record: toRecord(result.record),
         }),
       'btn btn-xs',
@@ -266,9 +352,7 @@ function detailRow(label: string, value: string, wrap = false): HTMLElement[] {
 
 function openDetail(detail: Detail): void {
   const { record } = detail;
-  const image = el<HTMLImageElement>('detail-image');
-  image.src = detail.fileUrl;
-  image.alt = detail.name;
+  showMedia(el<HTMLImageElement>('detail-image'), el<HTMLVideoElement>('detail-video'), detail);
   el('detail-name').textContent = detail.name;
   el<HTMLDialogElement>('detail').setAttribute('aria-label', `Details of ${detail.name}`);
   el('detail-empty').classList.toggle('hidden', record !== null);
@@ -286,6 +370,7 @@ function openDetail(detail: Detail): void {
         ],
         ['Quality', record.requested.quality],
         ['Format', record.requested.output_format],
+        ['Seconds', record.requested.seconds],
         ['Cost', record.cost === undefined ? undefined : usd(record.cost)],
         [
           'Latency',
@@ -313,6 +398,9 @@ function openDetail(detail: Detail): void {
   actions.push(copyButton('Copy path', detail.path, 'btn btn-sm'));
   // A URL from a record is only ever copied, never followed.
   if (record?.url) actions.push(copyButton('Copy URL', record.url, 'btn btn-sm'));
+  if (detail.kind === 'image') {
+    actions.push(actionButton('Use as input', () => useAsInput(detail), 'btn btn-sm'));
+  }
   // The form cannot reproduce the inputs of an edit or a video, so only images offer this.
   if (record && (record.kind === undefined || record.kind === 'image')) {
     actions.push(
@@ -332,11 +420,30 @@ function pick(select: HTMLSelectElement, value: string | undefined, fallback: st
   else select.selectedIndex = 0;
 }
 
+function backToForm(): void {
+  el<HTMLDialogElement>('detail').close();
+  el('generate-form').scrollIntoView({ block: 'start' });
+}
+
+// Adds a gallery image to the inputs and moves a text mode to the mode that takes them. It never
+// submits: generating spends credits.
+function useAsInput(detail: Detail): void {
+  const refusal = inputs.addSaved(detail.name, detail.fileUrl);
+  setMode(inputMode(mode));
+  el('inputs-info').textContent = refusal ?? '';
+  backToForm();
+  el('add-inputs').focus();
+}
+
 // Loads a record into the form. It never submits: generating spends credits. Every field is set,
 // to the recorded value or a neutral default, so nothing stale from an earlier choice survives.
 function useSettings(record: GenerationRecord): void {
+  // Only the records of this mode offer their settings.
+  const target: Mode = 'text-to-image';
   el<HTMLTextAreaElement>('prompt').value = record.prompt ?? '';
-  const recorded = models.find((candidate) => candidate.id === record.model);
+  const recorded = models.find(
+    (candidate) => candidate.id === record.model && supports(candidate, target),
+  );
   if (recorded) {
     // Only when the filters hide the recorded model are they cleared; otherwise they stay as set.
     const search = el<HTMLInputElement>('model-search').value.trim().toLowerCase();
@@ -350,9 +457,10 @@ function useSettings(record: GenerationRecord): void {
     }
     // Remembered in memory for this page only; the choice is persisted by the select's change
     // event and after a successful generation, never here.
-    chosenModel = recorded.id;
+    chosenModel[target] = recorded.id;
+    picks[target] = (picks[target] ?? 0) + 1;
   }
-  renderModels();
+  setMode(target);
   pick(el<HTMLSelectElement>('size'), record.requested.size, 'auto');
   pick(el<HTMLSelectElement>('quality'), record.requested.quality, 'auto');
   pick(el<HTMLSelectElement>('format'), record.requested.output_format, 'webp');
@@ -361,29 +469,44 @@ function useSettings(record: GenerationRecord): void {
       ? `The recorded model ${record.model} is not available. Choose another model.`
       : 'The recorded model is not available. Choose another model.';
   }
-  el<HTMLDialogElement>('detail').close();
+  backToForm();
   el('prompt').focus();
-  el('generate-form').scrollIntoView({ block: 'start' });
 }
 
 function tile(item: GalleryItem): HTMLElement {
   const record = toRecord(item.record);
+  const kind = mediaKind(item.kind);
   const wrapper = document.createElement('div');
   wrapper.className = 'flex min-w-0 flex-col gap-1';
 
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'aspect-square overflow-hidden rounded-box bg-base-200';
+  button.className = 'relative aspect-square overflow-hidden rounded-box bg-base-200';
   button.setAttribute('aria-label', `Open ${item.name}`);
   if (record?.prompt) button.title = record.prompt;
-  const image = document.createElement('img');
-  image.src = item.fileUrl;
-  image.alt = item.name;
-  image.loading = 'lazy';
-  image.className = 'h-full w-full object-cover transition hover:scale-105';
-  button.append(image);
+  const className = 'h-full w-full object-cover transition hover:scale-105';
+  if (kind === 'video') {
+    const video = document.createElement('video');
+    // Only the metadata is fetched, and the fragment makes the browser show a first frame.
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    video.src = `${item.fileUrl}#t=0.1`;
+    video.className = className;
+    const marker = document.createElement('span');
+    marker.className = 'badge badge-neutral badge-sm absolute bottom-2 left-2';
+    marker.textContent = 'Video';
+    button.append(video, marker);
+  } else {
+    const image = document.createElement('img');
+    image.src = item.fileUrl;
+    image.alt = item.name;
+    image.loading = 'lazy';
+    image.className = className;
+    button.append(image);
+  }
   button.addEventListener('click', () =>
-    openDetail({ name: item.name, path: item.path, fileUrl: item.fileUrl, record }),
+    openDetail({ name: item.name, path: item.path, fileUrl: item.fileUrl, kind, record }),
   );
   wrapper.append(button);
 
@@ -423,22 +546,22 @@ async function loadGallery(): Promise<void> {
   }
   // A newer search or refresh superseded this answer.
   if (run !== galleryRun) return;
-  const images = page.items.filter((item) => item.kind === 'image');
-  el('gallery-count').textContent = String(images.length);
-  empty.textContent = query ? 'No images match.' : 'Nothing generated yet.';
-  empty.classList.toggle('hidden', images.length > 0);
+  const { items } = page;
+  el('gallery-count').textContent = String(items.length);
+  empty.textContent = query ? 'Nothing matches.' : 'Nothing generated yet.';
+  empty.classList.toggle('hidden', items.length > 0);
 
   const spent = el('gallery-spent');
   const spentTotal = amount(page.spent);
-  const anyCost = images.some((item) => toRecord(item.record)?.cost !== undefined);
-  const matching = amount(page.total) ?? images.length;
+  const anyCost = items.some((item) => toRecord(item.record)?.cost !== undefined);
+  const matching = amount(page.total) ?? items.length;
   spent.textContent =
     spentTotal === undefined
       ? ''
-      : `Spent ${spentLabel(spentTotal)} on ${matching} ${matching === 1 ? 'image' : 'images'}`;
+      : `Spent ${spentLabel(spentTotal)} on ${matching} ${matching === 1 ? 'file' : 'files'}`;
   spent.classList.toggle('hidden', !anyCost || spentTotal === undefined);
 
-  el('gallery').replaceChildren(...images.map(tile));
+  el('gallery').replaceChildren(...items.map(tile));
 }
 
 async function generate(event: SubmitEvent): Promise<void> {
@@ -446,26 +569,41 @@ async function generate(event: SubmitEvent): Promise<void> {
   const submit = el<HTMLButtonElement>('submit');
   const error = el('error');
   error.classList.add('hidden');
+  const submitted = mode;
+  const { output, takesInput } = MODE_INFO[submitted];
+  if (takesInput && inputs.count === 0) {
+    error.textContent = 'Add at least one input image.';
+    error.classList.remove('hidden');
+    return;
+  }
   submit.disabled = true;
   submit.innerHTML = '<span class="loading loading-spinner loading-sm"></span> Generating';
   try {
     const model = el<HTMLSelectElement>('model').value;
+    const picked = picks[submitted];
     const quality = el<HTMLSelectElement>('quality');
+    const seconds = el<HTMLSelectElement>('seconds').value;
     const result = await api<Generated>('/api/generate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        prompt: el<HTMLTextAreaElement>('prompt').value,
+        prompt: el<HTMLTextAreaElement>('prompt').value.trim() || undefined,
         model,
         size: el<HTMLSelectElement>('size').value,
-        quality: quality.disabled ? undefined : quality.value,
-        output_format: el<HTMLSelectElement>('format').value,
+        output,
+        ...(output === 'video'
+          ? { seconds: seconds === 'auto' ? 'auto' : Number(seconds) }
+          : {
+              quality: quality.disabled ? undefined : quality.value,
+              output_format: el<HTMLSelectElement>('format').value,
+            }),
+        ...(takesInput ? { inputs: await inputs.payload() } : {}),
       }),
     });
-    // Keep a model the user picked while the request was in flight.
-    if (el<HTMLSelectElement>('model').value === model) {
-      chosenModel = model;
-      remember(MODEL_KEY, model);
+    // Keep a model the user picked in this mode while the request was in flight.
+    if (picks[submitted] === picked) {
+      chosenModel[submitted] = model;
+      remember(modelKey(submitted), model);
     }
     showResult(result);
     await Promise.all([loadGallery(), loadBalance()]);
@@ -497,9 +635,47 @@ async function init(): Promise<void> {
   el('free-only').addEventListener('change', renderModels);
   el('model').addEventListener('change', () => {
     const value = el<HTMLSelectElement>('model').value;
-    if (value) chosenModel = value;
+    if (value) {
+      chosenModel[mode] = value;
+      picks[mode] = (picks[mode] ?? 0) + 1;
+    }
     renderModelOptions();
   });
+  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="mode"]')) {
+    radio.addEventListener('change', () => {
+      if (radio.checked && isMode(radio.value)) setMode(radio.value);
+    });
+  }
+
+  inputs = createInputList(el('input-list'), () => (el('inputs-info').textContent = ''));
+  const picker = el<HTMLInputElement>('input-files');
+  el('add-inputs').addEventListener('click', () => picker.click());
+  picker.addEventListener('change', () => {
+    addInputFiles([...(picker.files ?? [])]);
+    // Picking the same file again must fire the event again.
+    picker.value = '';
+  });
+  // A file dropped on the page would make the browser leave it for that file. Dragged text is
+  // left alone, so it can still be dropped into the prompt.
+  const carriesFiles = (event: DragEvent): boolean =>
+    event.dataTransfer?.types.includes('Files') ?? false;
+  document.addEventListener('dragover', (event) => {
+    if (carriesFiles(event)) event.preventDefault();
+  });
+  document.addEventListener('drop', (event) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    if (MODE_INFO[mode].takesInput) addInputFiles([...(event.dataTransfer?.files ?? [])]);
+  });
+  document.addEventListener('paste', (event) => {
+    const files = [...(event.clipboardData?.files ?? [])];
+    // Pasted text still goes into the prompt.
+    if (!MODE_INFO[mode].takesInput || files.length === 0) return;
+    event.preventDefault();
+    addInputFiles(files);
+  });
+  const detailVideo = el<HTMLVideoElement>('detail-video');
+  el('detail').addEventListener('close', () => detailVideo.pause());
   const search = el<HTMLInputElement>('gallery-search');
   search.addEventListener('input', () => {
     clearTimeout(searchTimer);
@@ -515,12 +691,15 @@ async function init(): Promise<void> {
   });
   el('refresh-balance').addEventListener('click', () => void loadBalance());
 
-  let status: { hasApiKey: boolean; outputDir: string; defaultImageModel: string | null } | null =
-    null;
+  interface Status {
+    hasApiKey: boolean;
+    outputDir: string;
+    defaultImageModel: string | null;
+    defaultVideoModel: string | null;
+  }
+  let status: Status | null = null;
   try {
-    status = await api<{ hasApiKey: boolean; outputDir: string; defaultImageModel: string | null }>(
-      '/api/status',
-    );
+    status = await api<Status>('/api/status');
   } catch (error) {
     const alert = el('error');
     alert.textContent = `Could not load status: ${(error as Error).message}`;
@@ -529,19 +708,26 @@ async function init(): Promise<void> {
   if (status) {
     el('key-warning').classList.toggle('hidden', status.hasApiKey);
     el('gallery-dir').textContent = status.outputDir;
-    if (status.defaultImageModel && !remember(MODEL_KEY)) {
-      remember(MODEL_KEY, status.defaultImageModel);
-    }
     if (status.hasApiKey) void loadBalance();
   }
-  chosenModel = remember(MODEL_KEY);
+  for (const candidate of MODES) {
+    const configured =
+      MODE_INFO[candidate].output === 'video'
+        ? status?.defaultVideoModel
+        : status?.defaultImageModel;
+    if (configured && !remember(modelKey(candidate))) remember(modelKey(candidate), configured);
+    chosenModel[candidate] = remember(modelKey(candidate));
+  }
+  const remembered = remember(MODE_KEY);
+  setMode(isMode(remembered) ? remembered : 'text-to-image');
 
   void loadGallery();
   try {
     models = (await api<{ models: Model[] }>('/api/models')).models;
     renderModels();
   } catch (error) {
-    el('model-info').textContent = `Could not load models: ${(error as Error).message}`;
+    modelsNote = `Could not load models: ${(error as Error).message}`;
+    renderModelOptions();
   }
 }
 

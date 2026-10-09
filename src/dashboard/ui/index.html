@@ -37,6 +37,55 @@
       <form class="card bg-base-100 shadow-sm h-fit" id="generate-form">
         <div class="card-body gap-3">
           <h2 class="card-title">Generate</h2>
+          <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Mode">
+            <input
+              class="btn btn-sm"
+              type="radio"
+              name="mode"
+              value="text-to-image"
+              aria-label="Text → Image"
+              checked
+            />
+            <input
+              class="btn btn-sm"
+              type="radio"
+              name="mode"
+              value="image-to-image"
+              aria-label="Image → Image"
+            />
+            <input
+              class="btn btn-sm"
+              type="radio"
+              name="mode"
+              value="text-to-video"
+              aria-label="Text → Video"
+            />
+            <input
+              class="btn btn-sm"
+              type="radio"
+              name="mode"
+              value="image-to-video"
+              aria-label="Image → Video"
+            />
+          </div>
+          <fieldset class="fieldset hidden" id="inputs-field">
+            <legend class="fieldset-legend">Input images</legend>
+            <div class="flex-wrap gap-3 hidden" id="input-list"></div>
+            <div class="flex flex-wrap items-center gap-2">
+              <button class="btn btn-sm" id="add-inputs" type="button">Add images</button>
+              <span class="text-xs opacity-70">or drop or paste them</span>
+              <input
+                class="hidden"
+                id="input-files"
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                multiple
+                tabindex="-1"
+                aria-hidden="true"
+              />
+            </div>
+            <p class="label whitespace-normal" id="inputs-info" role="status"></p>
+          </fieldset>
           <fieldset class="fieldset">
             <legend class="fieldset-legend">Prompt</legend>
             <textarea
@@ -67,7 +116,7 @@
               <legend class="fieldset-legend">Size</legend>
               <select class="select select-sm w-full" id="size"></select>
             </fieldset>
-            <fieldset class="fieldset">
+            <fieldset class="fieldset" id="quality-field">
               <legend class="fieldset-legend">Quality</legend>
               <select class="select select-sm w-full" id="quality">
                 <option>auto</option>
@@ -76,7 +125,7 @@
                 <option>high</option>
               </select>
             </fieldset>
-            <fieldset class="fieldset">
+            <fieldset class="fieldset" id="format-field">
               <legend class="fieldset-legend">Format</legend>
               <select class="select select-sm w-full" id="format">
                 <option>webp</option>
@@ -84,7 +133,14 @@
                 <option>jpeg</option>
               </select>
             </fieldset>
+            <fieldset class="fieldset hidden" id="seconds-field">
+              <legend class="fieldset-legend">Seconds</legend>
+              <select class="select select-sm w-full" id="seconds"></select>
+            </fieldset>
           </div>
+          <p class="text-sm opacity-70 hidden" id="video-hint">
+            A video can take several minutes. Keep this tab open.
+          </p>
           <div role="alert" class="alert alert-error hidden" id="error"></div>
           <button class="btn btn-primary" id="submit" type="submit">Generate</button>
         </div>
@@ -98,6 +154,12 @@
               id="result-image"
               alt=""
             />
+            <video
+              class="rounded-box max-h-[70vh] w-full bg-base-200 hidden"
+              id="result-video"
+              controls
+              preload="metadata"
+            ></video>
             <div class="flex flex-wrap items-center gap-2 text-sm" id="result-meta"></div>
           </div>
         </div>
@@ -113,7 +175,7 @@
               id="gallery-search"
               type="search"
               placeholder="Search prompt, model or file name"
-              aria-label="Search images by prompt, model or file name"
+              aria-label="Search the gallery by prompt, model or file name"
               autocomplete="off"
             />
             <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4" id="gallery"></div>
@@ -123,7 +185,7 @@
       </section>
     </main>
 
-    <dialog class="modal" id="detail" aria-label="Image details">
+    <dialog class="modal" id="detail" aria-label="Details">
       <div class="modal-box w-11/12 max-w-5xl p-4 sm:p-6">
         <form method="dialog">
           <button
@@ -139,9 +201,15 @@
             id="detail-image"
             alt=""
           />
+          <video
+            class="rounded-box w-full max-h-[70vh] bg-base-200 hidden"
+            id="detail-video"
+            controls
+            preload="metadata"
+          ></video>
           <div class="flex min-w-0 flex-col gap-3">
             <p class="font-semibold break-all pr-8" id="detail-name"></p>
-            <p class="opacity-70 hidden" id="detail-empty">No details recorded for this image.</p>
+            <p class="opacity-70 hidden" id="detail-empty">No details recorded for this file.</p>
             <dl
               class="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm"
               id="detail-list"

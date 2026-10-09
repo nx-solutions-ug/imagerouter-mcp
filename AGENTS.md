@@ -74,7 +74,10 @@ client could not reach. Do not add a Streamable HTTP entry point.
 
 `src/dashboard/routes.ts` is a pure `Request → Response` function, so vitest
 can run it under Node. `src/dashboard/serve.ts` is the only file that touches
-`Bun.serve`; it binds `127.0.0.1` only and rejects unknown CLI options.
+`Bun.serve`; it binds `127.0.0.1` only and rejects unknown CLI options. It also
+lifts Bun's idle timeout (255 s at most) for `POST /api/generate` alone, because
+nothing is sent while a generation runs and a video can take 15 minutes; the
+client's own timeouts still end the request.
 
 The Host check (only `localhost`/`127.0.0.1` on the bound port) and the Origin
 check on non-GET requests are a **security boundary**, not decoration: without
@@ -83,10 +86,25 @@ never takes paths from the browser (`output_dir`, `images`, `masks` are not
 accepted), and `/files/:name` takes a bare file name only. Responses carry
 `x-content-type-options: nosniff`; keep the headers when adding routes.
 
-`GET /api/images` returns each image with its `record` (or `null`), filters by
-`q` (prompt, model, file name) before paging, and reports `spent`. It reads the
-sidecars of all images on every call; keep that tolerant of unreadable ones.
-Sidecars are not media: `.json` is neither listed nor served by `/files/`.
+Input images reach `POST /api/generate` as `inputs`, each entry either
+`{ saved }`, a bare name of an image in the output directory checked like
+`/files/:name`, or `{ data }`, an upload as an image data URI. Everything about
+them is checked before the API is called, so a refused request is never billed.
+The route stays JSON-only: that makes every cross-site attempt a preflighted
+request, so do not add a multipart upload. The generation kind is derived from
+`output` and `inputs`, never sent. Uploads are why `maxRequestBodySize` is 64 MB;
+the UI's limits (`src/dashboard/ui/modes.ts`) keep a request below it.
+
+The four modes and which model offers which live in `src/dashboard/ui/modes.ts`.
+It has no DOM, so vitest covers it; keep rules there and out of `app.ts`, which
+is only verified by hand in a browser.
+
+`GET /api/images` returns each saved image and video with its `record` (or
+`null`), filters by `q` (prompt, model, file name) before paging, and reports
+`spent`. It reads the sidecars of all files on every call; keep that tolerant of
+unreadable ones. Sidecars are not media: `.json` is neither listed nor served by
+`/files/`. `/files/:name` answers single byte ranges, which a browser needs to
+seek in a video.
 
 ## Build and runtime
 

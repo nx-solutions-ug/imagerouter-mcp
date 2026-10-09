@@ -47,12 +47,19 @@ export function startDashboard(deps: Deps, options: { port: number; open: boolea
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: options.port,
-    // Bun's maximum (seconds): image generation runs up to 180 s and must not be cut off.
+    // Bun's maximum (seconds), for everything but a generation.
     idleTimeout: 255,
-    // The only POST body is a small JSON document.
-    maxRequestBodySize: 1024 * 1024,
+    // Uploaded input images travel as base64 in the JSON body of a generation.
+    maxRequestBodySize: 64 * 1024 * 1024,
     // The Request is passed through unchanged so the handler's Host header guard sees it.
-    fetch: handler,
+    fetch(request, server) {
+      // Nothing is sent while a generation runs, and a video takes longer than any idle timeout
+      // Bun allows. The client's own image and video timeouts still end the request.
+      if (request.method === 'POST' && new URL(request.url).pathname === '/api/generate') {
+        server.timeout(request, 0);
+      }
+      return handler(request);
+    },
   });
   const url = `http://127.0.0.1:${server.port}`;
   process.stdout.write(`ImageRouter dashboard: ${url}\nSaving to ${deps.config.outputDir}\n`);

@@ -207,38 +207,64 @@ Starts a page on `http://127.0.0.1:4477` and opens your browser. Options:
 - `--no-open`: do not open a browser.
 
 Any other option is rejected. The dashboard shows your balance, a form to
-generate images (searchable model picker with prices and free models marked,
-size, quality, format), the result with its cost, latency, path and URL, and a
-gallery of the saved images in the output directory (videos and files of
-unrecognised type, saved as `.bin`, are not shown). When there is no remembered
-or configured model, or that model is hidden by the current filter, it
-selects the first visible free model so a first click never spends credits by
-accident; when the filter leaves no free model, the picker shows a disabled
-"Choose a model" entry and Generate stays blocked until you pick one. Your
-choice is only changed by you and by a successful generation, so clearing the
-filter brings it back.
-Editing and video are available through the MCP tools only.
+generate, the result with its cost, latency, path and URL, and a gallery of the
+images and videos saved in the output directory (files of unrecognised type,
+saved as `.bin`, are not shown).
 
-Images that have a metadata file show their model and pixel size under the
-thumbnail, with the prompt as tooltip. Click an image for its details: prompt,
-model, requested size and actual pixels, quality, format, cost, latency,
-creation time and file name, with buttons to copy the prompt, the path and the
-hosted URL, and **Use these settings**, which loads the prompt, model, size,
-quality and format into the form (it never submits it; if the recorded model is
-no longer offered, the other fields are still loaded and you are told). The
-search box above the gallery filters by prompt, model or file name, and
-"Spent $X.XX on N images" next to the count sums the recorded costs of all N
-matching images (not only the tiles shown), counting a multi-result request once;
-videos are never listed or counted. **Use these settings** sets the prompt, size,
-quality and format to the recorded values, or to neutral defaults (empty prompt,
-`auto`, `auto`, `webp`) where the record has none or the model does not offer them, and
-is offered for images only, not for edits or videos. Images without a metadata
-file (for example from before this feature) still show, without details.
+The form has four modes:
+
+| Mode          | Takes                   | Makes |
+| ------------- | ----------------------- | ----- |
+| Text → Image  | a prompt                | image |
+| Image → Image | images, prompt optional | image |
+| Text → Video  | a prompt                | video |
+| Image → Video | images, prompt optional | video |
+
+The model picker (searchable, with prices and free models marked) lists only the
+models that can do the selected mode, as ImageRouter reports it. Images have
+size, quality and format; videos have size and seconds. A video can take several
+minutes, so keep the tab open.
+
+Input images are added with **Add images**, by dropping them on the page or by
+pasting, or with **Use as input** in the details of a gallery image, which also
+switches a text mode to the matching image mode. Uploads are PNG, JPEG, WebP or
+GIF, at most 16 inputs, 10 MB each and 45 MB of uploads in total. They are sent
+to ImageRouter with the request and are not saved in the output directory.
+
+The mode and, per mode, the model are remembered. When there is no remembered or
+configured model, or that model is hidden by the current filter or cannot do the
+mode, the picker selects the first visible free model so a first click never
+spends credits by accident; when the filter leaves no free model, it shows a
+disabled "Choose a model" entry and Generate stays blocked until you pick one.
+Your choice is only changed by you and by a successful generation, so clearing
+the filter brings it back. `IMAGEROUTER_DEFAULT_IMAGE_MODEL` is the configured
+model of the image modes, `IMAGEROUTER_DEFAULT_VIDEO_MODEL` of the video modes.
+
+Files that have a metadata file show their model and pixel size under the
+thumbnail, with the prompt as tooltip; a video is marked "Video". Click a file
+for its details: prompt, model, requested size and actual pixels, quality,
+format, seconds, cost, latency, creation time and file name, with buttons to
+copy the prompt, the path and the hosted URL. A video plays there. The search
+box above the gallery filters by prompt, model or file name, and "Spent $X.XX on
+N files" next to the count sums the recorded costs of all N matching files (not
+only the tiles shown), counting a multi-result request once.
+
+**Use these settings** loads the prompt, model, size, quality and format of a
+text → image record into the form and switches to that mode. It never submits;
+if the recorded model is no longer offered, the other fields are still loaded
+and you are told. Fields the record lacks, or values the model does not offer,
+are set to neutral defaults (empty prompt, `auto`, `auto`, `webp`). It is not
+offered for edits or videos, whose input images cannot be restored. Files
+without a metadata file (for example from before that feature) still show,
+without details.
+
+Masks are available through the `edit_image` tool only.
 
 It listens on `127.0.0.1` only and answers only requests addressed to
 `localhost` or `127.0.0.1` on its own port. Cross-site POSTs are refused and
 responses carry security headers. Your API key stays in the server process; the
-browser never sees it.
+browser never sees it. The browser can hand over image bytes and the name of a
+file in the output directory, never a path.
 
 ## Configuration
 

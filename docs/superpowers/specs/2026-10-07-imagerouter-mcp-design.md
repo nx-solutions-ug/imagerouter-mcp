@@ -265,6 +265,10 @@ Single page, vanilla TypeScript, Tailwind + daisyUI, bundled by Bun at build tim
 Scope is image generation and balance, as asked. Editing and video stay
 MCP-only for now.
 
+Superseded on 2026-10-09: the dashboard now also edits images and generates
+videos, and its gallery lists videos. See
+`2026-10-09-dashboard-generation-modes-design.md`.
+
 ### Dashboard safety
 
 - Binds to `127.0.0.1` only.

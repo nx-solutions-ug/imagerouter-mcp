@@ -177,7 +177,7 @@ file a generation produced.
 - The result panel shows a `<video controls>` for a video, with the same badges
   and buttons; a video has no pixel size.
 - The gallery lists images and videos. A video tile is a muted
-  `<video preload="metadata">` with a play marker and the same caption. The spend
+  `<video preload="metadata">` with a "Video" marker and the same caption. The spend
   line reads "Spent $X.XX on N files". The search covers both.
 - The details dialog plays a video, and shows "Seconds" where a record has it.
 - **Use as input** in the details dialog of an image, with or without a record:
@@ -220,8 +220,9 @@ file a generation produced.
 - **Unit** (`tests/unit/modes.test.ts`): support per mode for each flag
   combination, including a prompt-less model; storage keys; the size and
   duration choices; the upload limits.
-- **Live** (`tests/live/`): an edit and a video from a data URI, with `test/test`
-  and `ir/test-video` only.
+- **Live** (`tests/live/`): an edit from a data URI with `test/test`. A video from
+  a data URI was probed by hand with `ir/test-video`; the live suite keeps to one
+  video call per run because that model is rate limited.
 - **By hand, in a browser**: all four modes with the free models, upload, drop,
   paste, Use as input, video playback and seeking, a narrow window.
 - **Not automated**: the timeout wrapper in `serve.ts` needs a real Bun server,

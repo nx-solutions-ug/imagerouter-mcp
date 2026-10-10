@@ -1,3 +1,10 @@
+## [1.2.1](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.2.0...v1.2.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **ci:** stop double 👀 reaction on [@claude](https://github.com/claude) comments ([#8](https://github.com/nx-solutions-ug/imagerouter-mcp/issues/8)) ([3a0c406](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/3a0c406b94b6d17baf6da164e5863d0fd665c965))
+
 # [1.2.0](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.1.1...v1.2.0) (2026-10-09)
 
 

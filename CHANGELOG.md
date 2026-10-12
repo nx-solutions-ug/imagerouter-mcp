@@ -1,3 +1,10 @@
+## [1.2.2](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.2.1...v1.2.2) (2026-10-12)
+
+
+### Bug Fixes
+
+* **ci:** run the Claude agent as chronova-agent[bot] and allow it in dependency review ([#9](https://github.com/nx-solutions-ug/imagerouter-mcp/issues/9)) ([d4c7dff](https://github.com/nx-solutions-ug/imagerouter-mcp/commit/d4c7dffc1c842f77b8c4200024ffeef1f70f27ae))
+
 ## [1.2.1](https://github.com/nx-solutions-ug/imagerouter-mcp/compare/v1.2.0...v1.2.1) (2026-10-10)
 
 

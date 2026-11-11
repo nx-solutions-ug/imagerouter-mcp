@@ -13,7 +13,7 @@ concurrency:
 jobs:
   type-check:
     name: Type Check
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
     timeout-minutes: 5
 
     steps:
@@ -33,7 +33,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
     timeout-minutes: 5
 
     steps:
@@ -56,7 +56,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
     timeout-minutes: 15
 
     steps:
@@ -76,7 +76,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
     timeout-minutes: 10
 
     steps:

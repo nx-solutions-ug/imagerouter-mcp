@@ -10,10 +10,20 @@ permissions:
   contents: read
 
 jobs:
+  # Chooses GitHub's runners or Coolify's for the jobs below; pick-runner.yml has the rules.
+  pick-runner:
+    permissions: {}
+    uses: ./.github/workflows/pick-runner.yml
+    with:
+      untrusted: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '')) && true || false }}
+    secrets:
+      billing-token: ${{ secrets.ACTIONS_BILLING_TOKEN }}
+
   # Run tests first to ensure quality before release
   test:
     name: Test
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+    needs: pick-runner
+    runs-on: ${{ fromJSON(github.run_attempt == 1 && needs.pick-runner.outputs.runs-on || needs.pick-runner.outputs.rerun-on) }}
 
     steps:
       - name: Checkout repository
@@ -47,8 +57,8 @@ jobs:
   # `prepublishOnly`, after semantic-release has bumped the version, so dist/ always matches it.
   release:
     name: Release
-    needs: test
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+    needs: [pick-runner, test]
+    runs-on: ${{ fromJSON(github.run_attempt == 1 && needs.pick-runner.outputs.runs-on || needs.pick-runner.outputs.rerun-on) }}
     permissions:
       contents: write
       issues: write
